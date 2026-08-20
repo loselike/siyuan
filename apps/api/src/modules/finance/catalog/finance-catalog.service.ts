@@ -49,9 +49,28 @@ export class FinanceCatalogService {
   }
 
   async create(principal: Principal, input: FinanceCatalogItemInput) {
+    return this.createWithPermissions(principal, input);
+  }
+
+  async createProductName(
+    principal: Principal,
+    input: Pick<FinanceCatalogItemInput, 'name' | 'enabled' | 'remark'>
+  ) {
+    return this.createWithPermissions(principal, { ...input, category: 'PRODUCT_NAME' }, [
+      'business:order-entry:edit',
+      'business:order-entry:create',
+      'business:order-entry:draft-edit'
+    ]);
+  }
+
+  private async createWithPermissions(
+    principal: Principal,
+    input: FinanceCatalogItemInput,
+    additionalPermissions: PermissionKey[] = []
+  ) {
     const data = this.normalizeInput(input, { requireCategory: true, requireName: true });
     const category = data.category as FinanceCatalogCategory;
-    await this.ensureWritePermission(principal, category, 'create');
+    await this.ensureWritePermission(principal, category, 'create', additionalPermissions);
     const name = data.name as string;
     await this.ensureUniqueName(category, name);
     if (data.sortOrder === undefined || data.sortOrder === 0) {
@@ -176,12 +195,16 @@ export class FinanceCatalogService {
   private async ensureWritePermission(
     principal: Principal,
     category: FinanceCatalogCategory,
-    action: 'create' | 'update' | 'delete' | 'reorder'
+    action: 'create' | 'update' | 'delete' | 'reorder',
+    additionalPermissions: PermissionKey[] = []
   ) {
     const permission = financeCatalogWritePermission(category, action);
     if (await this.authorizer.hasPermission(principal.role, permission)) return;
+    for (const additionalPermission of additionalPermissions) {
+      if (await this.authorizer.hasPermission(principal.role, additionalPermission)) return;
+    }
     await this.authorizer.recordPermissionDenied(principal, {
-      permissions: [permission],
+      permissions: [permission, ...additionalPermissions],
       method: 'SERVER',
       path: `finance/catalog/${category.toLowerCase()}/${action}`
     }).catch(() => undefined);

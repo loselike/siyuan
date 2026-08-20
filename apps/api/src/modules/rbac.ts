@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { PRICING_BUSINESS_CAPABILITIES, PRICING_MODULES } from '@siyuan/shared';
 
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
@@ -83,62 +84,32 @@ export type PermissionKey =
   | 'business:shipment:profit-view'
   | 'business:shipment:agent-weight-view'
   | 'business:shipment:export'
-  | 'business:shipment:column-setting'
   | 'business:order-ai:view'
   | 'business:order-ai:assist'
   | 'business:order-ai:finance-context'
   | 'business:order-ai:all-order-context'
   | 'business:order-ai:export-result'
   | 'market:dashboard:view'
-  | 'market:dashboard:pending-summary'
-  | 'market:dashboard:routed-summary'
-  | 'market:dashboard:weekly-summary'
-  | 'market:dashboard:agent-stats-view'
-  | 'market:dashboard:channel-mode-stats-view'
-  | 'market:dashboard:sensitive-summary-view'
   | 'market:pending-routing:view'
-  | 'market:pending-routing:detail'
-  | 'market:pending-routing:assign'
-  | 'market:pending-routing:save-draft'
-  | 'market:pending-routing:confirm'
-  | 'market:pending-routing:audit'
-  | 'market:pending-routing:update'
-  | 'market:pending-routing:delete'
-  | 'market:pending-routing:operation-log-view'
-  | 'market:pending-routing:business-cost-view'
-  | 'market:pending-routing:payable-cost-view'
-  | 'market:pending-routing:agent-channel-view'
-  | 'market:pending-routing:cost-field-view'
-  | 'market:pending-routing:column-setting'
-  | 'market:pending-routing:route-block'
-  | 'market:pending-routing:update-block'
-  | 'market:pending-routing:audit-block'
-  | 'market:pending-routing:operation-log-block'
-  | 'market:pending-routing:business-cost-update-block'
-  | 'market:pending-routing:business-cost-create-block'
-  | 'market:pending-routing:business-cost-delete-block'
-  | 'market:pending-routing:reroute-block'
+  | 'market:pending-routing:route'
+  | 'market:pending-routing:edit'
+  | 'market:pending-routing:approve'
+  | 'market:pending-routing:operation-log:view'
+  | 'market:pending-routing:business-cost:view'
+  | 'market:pending-routing:business-cost:create'
+  | 'market:pending-routing:business-cost:edit'
+  | 'market:pending-routing:business-cost:delete'
+  | 'market:pending-routing:payable-cost:view'
+  | 'market:pending-routing:payable-cost:create'
+  | 'market:pending-routing:payable-cost:edit'
+  | 'market:pending-routing:payable-cost:delete'
+  | 'market:pending-routing:return-review'
   | 'market:routed:view'
-  | 'market:routed:detail'
-  | 'market:routed:update'
   | 'market:routed:reroute'
-  | 'market:routed:log-view'
-  | 'market:routed:agent-cost-view'
-  | 'market:routed:cost-total-view'
-  | 'market:routed:agent-channel-view'
-  | 'market:routed:column-setting'
-  | 'market:routed:reroute-block'
-  | 'market:routed:update-block'
-  | 'market:routed:log-block'
-  | 'market:weekly-routing:view'
-  | 'market:weekly-routing:detail'
-  | 'market:weekly-routing:agent-stats-view'
-  | 'market:weekly-routing:channel-mode-stats-view'
-  | 'market:weekly-routing:cost-view'
-  | 'market:weekly-routing:reroute-stats-view'
-  | 'market:weekly-routing:sensitive-stats-view'
-  | 'market:weekly-routing:export'
-  | 'market:weekly-routing:column-setting'
+  | 'market:routed:replace-agent'
+  | 'market:routed:routing-log:view'
+  | 'market:routing-report:view'
+  | 'market:routing-report:export'
   | 'warehouse:dashboard:view'
   | 'warehouse:today-receipt:view'
   | 'warehouse:today-receipt:edit'
@@ -155,10 +126,14 @@ export type PermissionKey =
   | 'warehouse:in-stock:import'
   | 'warehouse:in-stock:export'
   | 'warehouse:tally-pending:view'
+  | 'warehouse:tally-pending:detail'
   | 'warehouse:tally-pending:edit'
-  | 'warehouse:tally-pending:cancel'
+  | 'warehouse:tally-pending:start'
   | 'warehouse:tally-pending:process'
-  | 'warehouse:tally-pending:complete-and-ship'
+  | 'warehouse:tally-pending:restart'
+  | 'warehouse:tally-pending:sort-rule-manage'
+  | 'warehouse:tally-pending:problem-view'
+  | 'warehouse:tally-pending:shipment-create'
   | 'warehouse:tally-completed:view'
   | 'warehouse:tally-completed:print'
   | 'warehouse:tally-completed:download'
@@ -182,16 +157,17 @@ export type PermissionKey =
   | 'warehouse:rent-detail:scope-all'
   | 'tracking:carrier-task:view'
   | 'tracking:carrier-task:detail'
+  | 'tracking:carrier-task:sync'
   | 'tracking:carrier-task:run'
   | 'tracking:carrier-task:retry'
   | 'tracking:carrier-task:error-view'
   | 'tracking:carrier-task:log-view'
-  | 'tracking:carrier-task:column-setting'
   | 'tracking:external:view'
   | 'tracking:external:latest-view'
   | 'tracking:external:stale-days-view'
   | 'tracking:external:detail'
   | 'tracking:external:single-add'
+  | 'tracking:external:import'
   | 'tracking:external:import-upload'
   | 'tracking:external:import-preview'
   | 'tracking:external:import-confirm'
@@ -199,7 +175,6 @@ export type PermissionKey =
   | 'tracking:external:unmatched-view'
   | 'tracking:external:overwrite'
   | 'tracking:external:customer-visible-update'
-  | 'tracking:external:column-setting'
   | 'tracking:external:export'
   | 'customer-service:transfer:view'
   | 'customer-service:transfer:write'
@@ -229,20 +204,18 @@ export type PermissionKey =
   | 'customer-service:data-confirm:agent-approve-block'
   | 'customer-service:data-confirm:approve-all'
   | 'customer-service:data-confirm:reverse'
-  | 'customer-service:data-confirm:column-setting'
   | 'customer-service:transfer:sub-order-write'
   | 'customer-service:transfer:push-sales'
   | 'customer-service:transfer:tracking-website-view'
   | 'customer-service:transfer:label-upload'
   | 'customer-service:transfer:label-view'
-  | 'customer-service:transfer:column-setting'
+  | 'customer-service:transfer:request-agent-change'
   | 'customer-service:pending-routing:view'
   | 'customer-service:pending-routing:fee-detail-view'
   | 'customer-service:pending-routing:fee-detail-block'
   | 'customer-service:pending-routing:readonly-block'
   | 'customer-service:pending-routing:agent-view'
   | 'customer-service:pending-routing:problem-create'
-  | 'customer-service:pending-routing:column-setting'
   | 'customer-service:waiting-departure:view'
   | 'customer-service:waiting-departure:update-info'
   | 'customer-service:waiting-departure:update-transfer-no'
@@ -251,26 +224,22 @@ export type PermissionKey =
   | 'customer-service:waiting-departure:confirm-departure'
   | 'customer-service:waiting-departure:problem-create'
   | 'customer-service:waiting-departure:label-upload'
-  | 'customer-service:waiting-departure:column-setting'
   | 'customer-service:departed:view'
   | 'customer-service:departed:update-info'
   | 'customer-service:departed:update-eta'
   | 'customer-service:departed:update-tracking-website'
   | 'customer-service:departed:confirm-arrived-port'
   | 'customer-service:departed:problem-create'
-  | 'customer-service:departed:column-setting'
   | 'customer-service:arrived-port:view'
   | 'customer-service:arrived-port:update-info'
   | 'customer-service:arrived-port:update-tracking-website'
   | 'customer-service:arrived-port:confirm-delivering'
   | 'customer-service:arrived-port:problem-create'
-  | 'customer-service:arrived-port:column-setting'
   | 'customer-service:delivering:view'
   | 'customer-service:delivering:update-info'
   | 'customer-service:delivering:confirm-signed'
   | 'customer-service:delivering:after-sale-create'
   | 'customer-service:delivering:problem-create'
-  | 'customer-service:delivering:column-setting'
   | 'customer-service:signed:view'
   | 'customer-service:signed:confirm'
   | 'customer-service:signed:remark'
@@ -278,7 +247,6 @@ export type PermissionKey =
   | 'customer-service:signed:after-sale-view'
   | 'customer-service:signed:after-sale-assist'
   | 'customer-service:signed:after-sale-close'
-  | 'customer-service:signed:column-setting'
   | 'customer-service:problem:view'
   | 'customer-service:problem:tag-manage'
   | 'customer-service:problem:create'
@@ -289,7 +257,6 @@ export type PermissionKey =
   | 'customer-service:problem:customer-visible-view'
   | 'customer-service:problem:customer-visible-update'
   | 'customer-service:problem:filter'
-  | 'customer-service:problem:column-setting'
   | 'customer-service:problem:export'
   | `pricing:${string}`
   | 'finance:dashboard:view'
@@ -331,6 +298,7 @@ export type PermissionKey =
   | 'finance:business-cost:view-sensitive'
   | 'finance:order-fee:payable:view'
   | 'finance:order-fee:payable:manage'
+  | 'finance:order-fee:receivable:manage'
   | 'finance:order-fee:profit:receivable-payable'
   | 'finance:order-fee:profit:receivable-business'
   | 'finance:order-fee:profit:business-payable'
@@ -449,6 +417,7 @@ export interface Principal {
   username: string;
   role: RoleKey;
   assignedRole?: RoleKey;
+  roleLabel?: string;
   site?: string;
   customerId?: string;
   name?: string;
@@ -460,8 +429,58 @@ export interface Principal {
   departmentId?: string;
   directManagerId?: string;
   departmentTeamScope?: string[];
+  /** Runtime effective permissions hydrated from the authoritative role store. */
+  effectivePermissions?: PermissionKey[];
   shipmentAllView?: boolean;
+  /** 财务模块显式全量查看能力；不等同于业务员/经理订单费用归属范围。 */
+  financeAllView?: boolean;
+  /** 应收费用资源的全量单票查看能力；不能由运单或其他财务资源权限推导。 */
+  financeReceivableAllView?: boolean;
   globalFieldMasks?: GlobalFieldMaskState;
+  /** Opaque client cache boundary; derived from the hydrated authorization scope. */
+  warehouseScopeFingerprint?: string;
+}
+
+export function createPrincipalScopeFingerprint(
+  principal: Principal,
+  permissions: PermissionKey[] = [],
+  secret: string
+) {
+  const scope = {
+    id: principal.id,
+    username: principal.username,
+    customerId: principal.customerId ?? null,
+    name: principal.name ?? null,
+    nickname: principal.nickname ?? null,
+    site: principal.site ?? null,
+    role: principal.role,
+    assignedRole: principal.assignedRole ?? null,
+    roleLabel: principal.roleLabel ?? null,
+    dataScope: principal.dataScope ?? null,
+    shipmentAllView: principal.shipmentAllView === true,
+    departmentTeamScope: Array.from(new Set(principal.departmentTeamScope ?? [])).sort(),
+    permissions: Array.from(new Set(permissions)).sort()
+  };
+  return createHmac('sha256', secret)
+    .update(`siyuan:warehouse-scope:v1:${JSON.stringify(scope)}`)
+    .digest('hex');
+}
+
+/**
+ * Only explicit global finance capabilities may bypass an order-fee owner
+ * scope. Ordinary maintenance permissions must still use resource scope.
+ */
+const explicitFinanceAllViewPermissions: readonly PermissionKey[] = [
+  'finance:receivable:view-all',
+  'finance:business-cost:view-all'
+];
+
+export function hasExplicitFinanceReceivableAllViewPermission(permissions: readonly PermissionKey[]) {
+  return permissions.includes('finance:receivable:view-all');
+}
+
+export function hasExplicitFinanceAllViewPermission(permissions: readonly PermissionKey[]) {
+  return permissions.some((permission) => explicitFinanceAllViewPermissions.includes(permission));
 }
 
 export interface PermissionDefinition {
@@ -539,16 +558,37 @@ export function isPaymentVoucherGloballyMasked(state: GlobalFieldMaskState | und
     || state?.['payable-status'] === true;
 }
 
+export function isFinanceBankDataGloballyMasked(state: GlobalFieldMaskState | undefined): boolean {
+  return state?.['agent-short-name'] === true
+    || state?.['agent-company-name'] === true
+    || state?.['agent-channel'] === true
+    || state?.['agent-data'] === true
+    || state?.['payable-cost'] === true;
+}
+
 export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[]): PermissionKey[] {
   const masks = resolveGlobalFieldMaskState(permissions);
   return permissions.filter((permission) => {
+    if (isFinanceBankDataGloballyMasked(masks)) {
+      if (permission === 'finance:pending-payment:create'
+        || permission === 'finance:pending-payment:bank-select'
+        || permission === 'finance:pending-payment:bank-manage'
+        || permission === 'finance:paid-payment:confirm'
+        || permission === 'finance:paid-payment:bank-view'
+        || permission === 'master-data:agents:bank-view'
+        || permission === 'master-data:agents:bank-manage') return false;
+    }
     if (masks['agent-short-name'] || masks['agent-company-name'] || masks['agent-channel'] || masks['agent-data']) {
       if (/^pricing:price-books:(?:upload|import|legacy-source-import|legacy-rebuild|cleanup-original-agents)$/.test(permission)) return false;
+      if (/^market:pending-routing:(?:route|edit|approve)$/.test(permission)) return false;
+      if (permission === 'market:routed:replace-agent') return false;
+      if (permission === 'customer-service:transfer:request-agent-change') return false;
       if (permission === 'finance:pending-payment:payment-voucher-upload'
         || permission === 'finance:paid-payment:voucher-upload') return false;
     }
     if (masks['agent-data']) {
       if (permission.startsWith('master-data:agents:') || permission.startsWith('master-data:agent-channels:')) return false;
+      if (permission === 'business:shipment:agent-weight-view') return false;
       if (/^(customer-service|market):.*:(?:agent|agent-data|view-agent|view-agent-data|agent-view|agent-channel-view|agent-cost-view|agent-stats-view)$/.test(permission)) return false;
       if (permission.startsWith('finance:agent-bill:')) return false;
     }
@@ -557,6 +597,10 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
       if (permission.endsWith(':agent-channel-view') || permission.endsWith(':channel-mode-stats-view')) return false;
     }
     if (masks['payable-cost']) {
+      if (permission.startsWith('master-data:payer-banks:')) return false;
+      if (/^market:pending-routing:(?:route|edit|approve)$/.test(permission)) return false;
+      if (permission === 'market:routed:replace-agent') return false;
+      if (permission.startsWith('market:pending-routing:payable-cost:')) return false;
       if (/^finance:payable:(?:manage|export|payment|attachment|attachment-view|view-sensitive|view-profit|paid-export|paid-voucher)$/.test(permission)) return false;
       if (/^finance:pending-payment:(?:create|update|bill-voucher-view|payment-voucher-view|payment-voucher-upload|export|view-sensitive)$/.test(permission)) return false;
       if (/^finance:paid-payment:(?:update|voucher-view|voucher-upload|export|view-sensitive)$/.test(permission)) return false;
@@ -568,6 +612,8 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
       if (/^misc-fee:[^:]+:attachment-view$/.test(permission)) return false;
     }
     if (masks['payable-status']) {
+      if (/^market:pending-routing:(?:route|edit|approve)$/.test(permission)) return false;
+      if (permission === 'market:routed:replace-agent') return false;
       if (/^finance:payable:(?:audit|reverse|void|payment|paid-confirm|paid-reverse|batch-audit|batch-reverse|batch-void)$/.test(permission)) return false;
       if (/^finance:pending-payment:(?:create|update|cancel|payment-voucher-upload)$/.test(permission)) return false;
       if (/^finance:paid-payment:(?:confirm|update|reverse|voucher-upload)$/.test(permission)) return false;
@@ -584,6 +630,26 @@ const globalFieldMaskPermissionDefinitions: PermissionDefinition[] = globalField
   label: `总规则 · ${globalFieldMaskLabels[mask]}`,
   group: '系统管理 / 角色权限分配'
 }));
+
+const miscFeeAssignableActions: Record<string, readonly string[]> = {
+  kuayue: ['read', 'create', 'update', 'audit', 'reverse-audit', 'void', 'hang', 'attachment-view', 'attachment-upload'],
+  pickup: ['read', 'create', 'update', 'audit', 'reverse-audit', 'void', 'match', 'hang', 'attachment-view', 'attachment-upload'],
+  tally: ['read', 'create', 'update', 'confirm', 'audit', 'reverse-audit', 'void', 'hang', 'attachment-view', 'attachment-upload'],
+  purchase: ['read', 'create', 'update', 'void', 'hang', 'attachment-view', 'attachment-upload'],
+  delivery: ['read', 'create', 'confirm', 'audit', 'reverse-audit', 'void', 'match', 'hang', 'attachment-view', 'attachment-upload'],
+  hang: ['read', 'hang-approve'],
+  'market-profit': ['read', 'settlement-generate', 'settlement-audit', 'settlement-reverse'],
+  'warehouse-profit': ['read', 'settlement-generate', 'settlement-audit', 'settlement-reverse'],
+  'finance-profit': ['read', 'export', 'settlement-generate', 'settlement-audit', 'settlement-reverse']
+};
+
+const miscFeeActionLabels: Record<string, string> = {
+  read: '查看', create: '新增/导入', update: '修改', confirm: '确认', audit: '审核',
+  'reverse-audit': '反审核', void: '作废/删除', match: '匹配业务成本', hang: '发起挂账',
+  'hang-approve': '处理挂账', 'attachment-view': '查看附件', 'attachment-upload': '上传附件', export: '导出',
+  'settlement-generate': '生成和维护结算单', 'settlement-audit': '审核和归档结算单',
+  'settlement-reverse': '反审核结算单'
+};
 
 export interface RolePermissionRow {
   key: RoleKey;
@@ -656,8 +722,8 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'business:dashboard:view', label: '查看业务看板', group: '业务管理 / 业务看板' },
   { code: 'business:dashboard:team-view', label: '查看团队统计', group: '业务管理 / 业务看板' },
   { code: 'business:dashboard:all-view', label: '查看全部统计', group: '业务管理 / 业务看板' },
-  { code: 'business:dashboard:trend-view', label: '查看录单趋势', group: '业务管理 / 业务看板' },
-  { code: 'business:dashboard:pending-review-summary', label: '查看待审核摘要', group: '业务管理 / 业务看板' },
+  { code: 'business:dashboard:trend-view', label: '兼容：查看录单趋势', group: '业务管理 / 业务看板', assignable: false },
+  { code: 'business:dashboard:pending-review-summary', label: '兼容：查看待审核摘要', group: '业务管理 / 业务看板', assignable: false },
   { code: 'business:order-entry:view', label: '录单页面技术入口', group: '业务管理 / 录单', assignable: false },
   { code: 'business:order-entry:edit', label: '编辑', group: '业务管理 / 录单' },
   { code: 'business:order-entry:business-cost', label: '业务成本', group: '业务管理 / 录单' },
@@ -685,73 +751,43 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'business:shipment:team-view', label: '查看团队运单', group: '业务管理 / 运单管理' },
   { code: 'business:shipment:all-view', label: '查看全部运单', group: '业务管理 / 运单管理' },
   { code: 'business:shipment:update-basic', label: '修改运单基础资料', group: '业务管理 / 运单管理' },
-  { code: 'business:shipment:update-operational', label: '修改运单运营资料', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:update-operational', label: '兼容：修改运单运营资料', group: '业务管理 / 运单管理', assignable: false },
   { code: 'business:shipment:delete', label: '删除运单', group: '业务管理 / 运单管理' },
   { code: 'business:shipment:payment-record', label: '登记收付款信息', group: '业务管理 / 运单管理' },
-  { code: 'business:shipment:tracking-add', label: '添加运单轨迹', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:tracking-add', label: '兼容：添加运单轨迹', group: '业务管理 / 运单管理', assignable: false },
   { code: 'business:shipment:problem-create', label: '创建运单问题件', group: '业务管理 / 运单管理' },
-  { code: 'business:shipment:finance-detail-view', label: '查看运单财务明细', group: '业务管理 / 运单管理' },
-  { code: 'business:shipment:receivable-view', label: '查看运单应收', group: '业务管理 / 运单管理' },
-  { code: 'business:shipment:payable-view', label: '查看运单应付', group: '业务管理 / 运单管理' },
-  { code: 'business:shipment:profit-view', label: '查看运单利润', group: '业务管理 / 运单管理' },
-  { code: 'business:shipment:agent-weight-view', label: '查看代理计费重', group: '业务管理 / 运单管理' },
-  { code: 'business:shipment:export', label: '导出运单', group: '业务管理 / 运单管理' },
-  { code: 'business:shipment:column-setting', label: '保存运单列设置', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:finance-detail-view', label: '兼容：查看运单财务明细', group: '业务管理 / 运单管理', assignable: false },
+  { code: 'business:shipment:receivable-view', label: '兼容：查看运单应收', group: '业务管理 / 运单管理', assignable: false },
+  { code: 'business:shipment:payable-view', label: '兼容：查看运单应付', group: '业务管理 / 运单管理', assignable: false },
+  { code: 'business:shipment:profit-view', label: '兼容：查看运单利润', group: '业务管理 / 运单管理', assignable: false },
+  { code: 'business:shipment:agent-weight-view', label: '兼容：查看代理计费重', group: '业务管理 / 运单管理', assignable: false },
+  { code: 'business:shipment:export', label: '兼容：导出运单', group: '业务管理 / 运单管理', assignable: false },
   { code: 'business:order-ai:view', label: '查看 AI 订单助手', group: '业务管理 / AI 订单助手' },
   { code: 'business:order-ai:assist', label: '调用 AI 订单助手', group: '业务管理 / AI 订单助手' },
-  { code: 'business:order-ai:finance-context', label: '允许 AI 使用财务上下文', group: '业务管理 / AI 订单助手' },
+  { code: 'business:order-ai:finance-context', label: '兼容：允许 AI 使用财务上下文', group: '业务管理 / AI 订单助手', assignable: false },
   { code: 'business:order-ai:all-order-context', label: '允许 AI 使用全部订单上下文', group: '业务管理 / AI 订单助手' },
-  { code: 'business:order-ai:export-result', label: '导出 AI 订单结果', group: '业务管理 / AI 订单助手' },
-  { code: 'market:dashboard:view', label: '查看市场看板', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:pending-summary', label: '查看待排货概览', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:routed-summary', label: '查看已排货概览', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:weekly-summary', label: '查看本周排货统计', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:agent-stats-view', label: '查看代理统计', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:channel-mode-stats-view', label: '查看空海运渠道统计', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:sensitive-summary-view', label: '查看敏感货与申报统计', group: '市场管理 / 市场看板' },
-  { code: 'market:pending-routing:view', label: '查看待排货列表', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:detail', label: '查看待排货详情', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:assign', label: '打开并填写排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:save-draft', label: '保存排货资料', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:confirm', label: '确认排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:audit', label: '审核排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:update', label: '修改排货资料', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:delete', label: '删除待排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:operation-log-view', label: '查看待排货操作日志', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:business-cost-view', label: '查看业务成本', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:payable-cost-view', label: '查看应付成本', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:agent-channel-view', label: '查看代理与代理渠道', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:cost-field-view', label: '查看计费重与市场成本', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:column-setting', label: '保存待排货列设置', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:route-block', label: '屏蔽排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:update-block', label: '屏蔽修改', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:audit-block', label: '屏蔽审核', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:operation-log-block', label: '屏蔽操作日志', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:business-cost-update-block', label: '屏蔽业务成本修改', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:business-cost-create-block', label: '屏蔽业务成本新增', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:business-cost-delete-block', label: '屏蔽业务成本删除', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:reroute-block', label: '屏蔽退回重审', group: '市场管理 / 待排货' },
-  { code: 'market:routed:view', label: '查看已排货列表', group: '市场管理 / 已排货' },
-  { code: 'market:routed:detail', label: '查看已排货详情', group: '市场管理 / 已排货' },
-  { code: 'market:routed:update', label: '修改已排货资料', group: '市场管理 / 已排货' },
+  { code: 'business:order-ai:export-result', label: '兼容：导出 AI 订单结果', group: '业务管理 / AI 订单助手', assignable: false },
+  { code: 'market:dashboard:view', label: '查看', group: '市场管理 / 市场看板' },
+  { code: 'market:pending-routing:view', label: '查看', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:route', label: '排货', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:edit', label: '修改', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:approve', label: '审核', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:operation-log:view', label: '查看操作日志', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost:view', label: '查看业务成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost:create', label: '新增业务成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost:edit', label: '修改业务成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost:delete', label: '删除业务成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:payable-cost:view', label: '查看应付成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:payable-cost:create', label: '新增应付成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:payable-cost:edit', label: '修改应付成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:payable-cost:delete', label: '删除应付成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:return-review', label: '退回重审', group: '市场管理 / 待排货' },
+  { code: 'market:routed:view', label: '查看', group: '市场管理 / 已排货' },
   { code: 'market:routed:reroute', label: '退回重排', group: '市场管理 / 已排货' },
-  { code: 'market:routed:log-view', label: '查看排货日志', group: '市场管理 / 已排货' },
-  { code: 'market:routed:agent-cost-view', label: '查看代理成本', group: '市场管理 / 已排货' },
-  { code: 'market:routed:cost-total-view', label: '查看市场成本合计', group: '市场管理 / 已排货' },
-  { code: 'market:routed:agent-channel-view', label: '查看代理渠道', group: '市场管理 / 已排货' },
-  { code: 'market:routed:column-setting', label: '保存已排货列设置', group: '市场管理 / 已排货' },
-  { code: 'market:routed:reroute-block', label: '屏蔽退回重排', group: '市场管理 / 已排货' },
-  { code: 'market:routed:update-block', label: '屏蔽修改', group: '市场管理 / 已排货' },
-  { code: 'market:routed:log-block', label: '屏蔽排货日志', group: '市场管理 / 已排货' },
-  { code: 'market:weekly-routing:view', label: '查看本周排货数据', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:detail', label: '查看本周排货明细', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:agent-stats-view', label: '查看本周代理统计', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:channel-mode-stats-view', label: '查看本周渠道统计', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:cost-view', label: '查看本周成本', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:reroute-stats-view', label: '查看本周退回重排统计', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:sensitive-stats-view', label: '查看本周敏感货与申报统计', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:export', label: '导出本周排货数据', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:column-setting', label: '保存本周排货列设置', group: '市场管理 / 本周排货数据' },
+  { code: 'market:routed:replace-agent', label: '处理代理变更', group: '市场管理 / 已排货' },
+  { code: 'market:routed:routing-log:view', label: '查看排货日志', group: '市场管理 / 已排货' },
+  { code: 'market:routing-report:view', label: '查看', group: '市场管理 / 排货数据' },
+  { code: 'market:routing-report:export', label: '导出', group: '市场管理 / 排货数据' },
   { code: 'warehouse:dashboard:view', label: '查看', group: '仓库管理 / 仓库看板' },
   { code: 'warehouse:today-receipt:view', label: '查看', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:edit', label: '编辑', group: '仓库管理 / 今日收货' },
@@ -768,10 +804,14 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:in-stock:import', label: '批量导入', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:export', label: '批量下载', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:tally-pending:view', label: '查看', group: '仓库管理 / 未完成理货' },
-  { code: 'warehouse:tally-pending:edit', label: '编辑任务', group: '仓库管理 / 未完成理货' },
-  { code: 'warehouse:tally-pending:cancel', label: '取消任务', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:detail', label: '查看任务', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:edit', label: '修改', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:start', label: '开始理货', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:process', label: '处理理货', group: '仓库管理 / 未完成理货' },
-  { code: 'warehouse:tally-pending:complete-and-ship', label: '理货并创建出货单', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:restart', label: '退回重理', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:sort-rule-manage', label: '排序规则', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:problem-view', label: '查看理货问题件', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:shipment-create', label: '技术前置：创建理货出货单', group: '仓库管理 / 未完成理货', assignable: false },
   { code: 'warehouse:tally-completed:view', label: '查看', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:print', label: '打印标签', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:download', label: '下载标签', group: '仓库管理 / 已完成理货' },
@@ -793,10 +833,23 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:rent-detail:scope-team', label: '本人及直属组员', group: '仓库管理 / 仓租数据范围' },
   { code: 'warehouse:rent-detail:scope-site', label: '所属站点', group: '仓库管理 / 仓租数据范围' },
   { code: 'warehouse:rent-detail:scope-all', label: '全部站点', group: '仓库管理 / 仓租数据范围' },
+  { code: 'tracking:carrier-task:sync', label: '同步轨迹', group: '物流轨迹管理 / 承运商任务' },
+  { code: 'tracking:external:import', label: '导入轨迹', group: '物流轨迹管理 / 外部物流轨迹' },
   ...[
-    ['carrier-task', 'view', '查看承运商任务', '承运商任务'], ['carrier-task', 'detail', '查看任务详情', '承运商任务'], ['carrier-task', 'run', '手动同步轨迹', '承运商任务'], ['carrier-task', 'retry', '重试失败任务', '承运商任务'], ['carrier-task', 'error-view', '查看失败原因', '承运商任务'], ['carrier-task', 'log-view', '查看同步日志', '承运商任务'], ['carrier-task', 'column-setting', '保存任务列设置', '承运商任务'],
-    ['external', 'view', '查看外部物流轨迹', '外部物流轨迹'], ['external', 'latest-view', '查看最新物流轨迹', '外部物流轨迹'], ['external', 'stale-days-view', '查看未更新天数', '外部物流轨迹'], ['external', 'detail', '查看轨迹详情', '外部物流轨迹'], ['external', 'single-add', '单票添加轨迹', '外部物流轨迹'], ['external', 'import-upload', '上传轨迹表', '外部物流轨迹'], ['external', 'import-preview', '查看导入预览', '外部物流轨迹'], ['external', 'import-confirm', '确认导入轨迹', '外部物流轨迹'], ['external', 'import-error-view', '查看失败行', '外部物流轨迹'], ['external', 'unmatched-view', '查看未匹配单号', '外部物流轨迹'], ['external', 'overwrite', '覆盖最新物流轨迹', '外部物流轨迹'], ['external', 'customer-visible-update', '更新客户可见轨迹', '外部物流轨迹'], ['external', 'column-setting', '保存轨迹列设置', '外部物流轨迹'], ['external', 'export', '导出轨迹列表', '外部物流轨迹']
-  ].map(([section, action, label, group]) => ({ code: `tracking:${section}:${action}` as PermissionKey, label, group: `物流轨迹管理 / ${group}` })),
+    ['carrier-task', 'view', '查看承运商任务', '承运商任务'], ['carrier-task', 'detail', '查看任务详情', '承运商任务'], ['carrier-task', 'run', '手动同步轨迹', '承运商任务'], ['carrier-task', 'retry', '重试失败任务', '承运商任务'], ['carrier-task', 'error-view', '查看失败原因', '承运商任务'], ['carrier-task', 'log-view', '查看同步日志', '承运商任务'],
+    ['external', 'view', '查看外部物流轨迹', '外部物流轨迹'], ['external', 'latest-view', '查看最新物流轨迹', '外部物流轨迹'], ['external', 'stale-days-view', '查看未更新天数', '外部物流轨迹'], ['external', 'detail', '查看轨迹详情', '外部物流轨迹'], ['external', 'single-add', '单票添加轨迹', '外部物流轨迹'], ['external', 'import-upload', '上传轨迹表', '外部物流轨迹'], ['external', 'import-preview', '查看导入预览', '外部物流轨迹'], ['external', 'import-confirm', '确认导入轨迹', '外部物流轨迹'], ['external', 'import-error-view', '查看失败行', '外部物流轨迹'], ['external', 'unmatched-view', '查看未匹配单号', '外部物流轨迹'], ['external', 'overwrite', '覆盖最新物流轨迹', '外部物流轨迹'], ['external', 'customer-visible-update', '更新客户可见轨迹', '外部物流轨迹'], ['external', 'export', '导出轨迹列表', '外部物流轨迹']
+  ].map(([section, action, label, group]) => {
+    const code = `tracking:${section}:${action}` as PermissionKey;
+    const legacyRuntimeOnly = new Set<PermissionKey>([
+      'tracking:carrier-task:detail', 'tracking:carrier-task:run', 'tracking:carrier-task:retry', 'tracking:carrier-task:error-view',
+      'tracking:carrier-task:log-view',
+      'tracking:external:latest-view', 'tracking:external:stale-days-view', 'tracking:external:single-add',
+      'tracking:external:import-upload', 'tracking:external:import-preview', 'tracking:external:import-confirm',
+      'tracking:external:import-error-view', 'tracking:external:unmatched-view', 'tracking:external:overwrite',
+      'tracking:external:customer-visible-update', 'tracking:external:export'
+    ]);
+    return { code, label: legacyRuntimeOnly.has(code) ? `兼容：${label}` : label, group: `物流轨迹管理 / ${group}`, assignable: legacyRuntimeOnly.has(code) ? false : undefined };
+  }),
   { code: 'customer-service:dashboard:view', label: '查看客服看板', group: '客服管理 / 客服看板' },
   { code: 'customer-service:dashboard:task-card-view', label: '查看任务卡片', group: '客服管理 / 客服看板' },
   { code: 'customer-service:dashboard:problem-summary-view', label: '查看问题件摘要', group: '客服管理 / 客服看板' },
@@ -817,7 +870,6 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'customer-service:data-confirm:agent-approve-block', label: '兼容：屏蔽代理审核', group: '客服管理 / 数据确认', assignable: false },
   { code: 'customer-service:data-confirm:approve-all', label: '双数据审核通过', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:reverse', label: '反审核数据确认', group: '客服管理 / 数据确认' },
-  { code: 'customer-service:data-confirm:column-setting', label: '保存数据确认列设置', group: '客服管理 / 数据确认' },
   { code: 'customer-service:transfer:view', label: '转单号查看', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:write', label: '填写转单号', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:batch-write', label: '批量填写转单号', group: '客服管理 / 转单号' },
@@ -827,20 +879,20 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'customer-service:transfer:tracking-website-view', label: '查看追踪网站', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:label-upload', label: '上传面单', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:label-view', label: '查看面单', group: '客服管理 / 转单号' },
-  { code: 'customer-service:transfer:column-setting', label: '保存转单号列设置', group: '客服管理 / 转单号' },
+  { code: 'customer-service:transfer:request-agent-change', label: '发起代理变更', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-outbound-time', label: '查看转单号出库时间', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-agent', label: '查看转单号代理信息', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-agent-data', label: '查看转单号代理数据', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-sensitive', label: '查看转单号敏感货物属性', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-all', label: '查看全部授权转单号订单', group: '客服管理 / 转单号' },
   ...[
-    ['pending-routing', 'view', '查看待排货'], ['pending-routing', 'fee-detail-view', '查看费用明细'], ['pending-routing', 'fee-detail-block', '兼容：屏蔽查看费用'], ['pending-routing', 'readonly-block', '兼容：屏蔽只读'], ['pending-routing', 'agent-view', '查看代理信息'], ['pending-routing', 'problem-create', '创建问题件'], ['pending-routing', 'column-setting', '保存待排货列设置'],
-    ['waiting-departure', 'view', '查看待离港'], ['waiting-departure', 'update-info', '修改待离港资料'], ['waiting-departure', 'update-transfer-no', '修改转单号'], ['waiting-departure', 'update-etd-eta', '修改 ETD/ETA'], ['waiting-departure', 'update-tracking-website', '修改追踪网站'], ['waiting-departure', 'confirm-departure', '确认离港'], ['waiting-departure', 'problem-create', '创建问题件'], ['waiting-departure', 'label-upload', '上传面单'], ['waiting-departure', 'column-setting', '保存待离港列设置'],
-    ['departed', 'view', '查看已离港'], ['departed', 'update-info', '修改已离港资料'], ['departed', 'update-eta', '修改 ETA'], ['departed', 'update-tracking-website', '修改追踪网站'], ['departed', 'confirm-arrived-port', '确认到港'], ['departed', 'problem-create', '创建问题件'], ['departed', 'column-setting', '保存已离港列设置'],
-    ['arrived-port', 'view', '查看已到港'], ['arrived-port', 'update-info', '修改已到港资料'], ['arrived-port', 'update-tracking-website', '修改追踪网站'], ['arrived-port', 'confirm-delivering', '确认派送'], ['arrived-port', 'problem-create', '创建问题件'], ['arrived-port', 'column-setting', '保存已到港列设置'],
-    ['delivering', 'view', '查看已派送'], ['delivering', 'update-info', '修改已派送资料'], ['delivering', 'confirm-signed', '确认签收'], ['delivering', 'after-sale-create', '创建售后'], ['delivering', 'problem-create', '创建问题件'], ['delivering', 'column-setting', '保存已派送列设置'],
-    ['signed', 'view', '查看已签收'], ['signed', 'confirm', '确认签收'], ['signed', 'remark', '维护签收备注'], ['signed', 'after-sale-create', '创建售后'], ['signed', 'after-sale-view', '查看售后'], ['signed', 'after-sale-assist', '标记售后需协助'], ['signed', 'after-sale-close', '关闭售后'], ['signed', 'column-setting', '保存已签收列设置'],
-    ['problem', 'view', '查看问题件'], ['problem', 'create', '创建问题件'], ['problem', 'reply', '回复问题件'], ['problem', 'close', '关闭问题件'], ['problem', 'assist', '标记需协助'], ['problem', 'after-sale-view', '查看需协助问题件'], ['problem', 'customer-visible-view', '查看客户可见信息'], ['problem', 'customer-visible-update', '维护客户可见信息'], ['problem', 'filter', '筛选问题件'], ['problem', 'column-setting', '保存问题件列设置'], ['problem', 'export', '导出问题件']
+    ['pending-routing', 'view', '查看待排货'], ['pending-routing', 'fee-detail-view', '查看费用明细'], ['pending-routing', 'fee-detail-block', '兼容：屏蔽查看费用'], ['pending-routing', 'readonly-block', '兼容：屏蔽只读'], ['pending-routing', 'agent-view', '查看代理信息'], ['pending-routing', 'problem-create', '创建问题件'],
+    ['waiting-departure', 'view', '查看待离港'], ['waiting-departure', 'update-info', '修改待离港资料'], ['waiting-departure', 'update-transfer-no', '修改转单号'], ['waiting-departure', 'update-etd-eta', '修改 ETD/ETA'], ['waiting-departure', 'update-tracking-website', '修改追踪网站'], ['waiting-departure', 'confirm-departure', '确认离港'], ['waiting-departure', 'problem-create', '创建问题件'], ['waiting-departure', 'label-upload', '上传面单'],
+    ['departed', 'view', '查看已离港'], ['departed', 'update-info', '修改已离港资料'], ['departed', 'update-eta', '修改 ETA'], ['departed', 'update-tracking-website', '修改追踪网站'], ['departed', 'confirm-arrived-port', '确认到港'], ['departed', 'problem-create', '创建问题件'],
+    ['arrived-port', 'view', '查看已到港'], ['arrived-port', 'update-info', '修改已到港资料'], ['arrived-port', 'update-tracking-website', '修改追踪网站'], ['arrived-port', 'confirm-delivering', '确认派送'], ['arrived-port', 'problem-create', '创建问题件'],
+    ['delivering', 'view', '查看已派送'], ['delivering', 'update-info', '修改已派送资料'], ['delivering', 'confirm-signed', '确认签收'], ['delivering', 'after-sale-create', '创建售后'], ['delivering', 'problem-create', '创建问题件'],
+    ['signed', 'view', '查看已签收'], ['signed', 'confirm', '确认签收'], ['signed', 'remark', '维护签收备注'], ['signed', 'after-sale-create', '创建售后'], ['signed', 'after-sale-view', '查看售后'], ['signed', 'after-sale-assist', '标记售后需协助'], ['signed', 'after-sale-close', '关闭售后'],
+    ['problem', 'view', '查看问题件'], ['problem', 'create', '创建问题件'], ['problem', 'reply', '回复问题件'], ['problem', 'close', '关闭问题件'], ['problem', 'assist', '标记需协助'], ['problem', 'after-sale-view', '查看需协助问题件'], ['problem', 'customer-visible-view', '查看客户可见信息'], ['problem', 'customer-visible-update', '维护客户可见信息'], ['problem', 'filter', '筛选问题件'], ['problem', 'export', '导出问题件']
   ].map(([section, action, label]) => ({ code: `customer-service:${section}:${action}` as PermissionKey, label, group: `客服管理 / ${({ 'pending-routing': '待排货', 'waiting-departure': '待离港', departed: '已离港', 'arrived-port': '已到港', delivering: '已派送', signed: '已签收 / 售后', problem: '问题件' } as Record<string, string>)[section]}`, ...(action.endsWith('-block') ? { assignable: false } : {}) })),
   ...[
     ['lookup:view', '进入报价查价页面', '查价'], ['lookup:meta-view', '加载查价基础数据', '查价'],
@@ -878,74 +930,72 @@ export const permissionDefinitions: PermissionDefinition[] = [
       : capability.group}`
   })),
   ...[
-    ['dashboard', 'view', '查看财务看板'], ['dashboard', 'receivable-todo', '查看应收待办'], ['dashboard', 'payable-todo', '查看应付待办'], ['dashboard', 'water-receipt-todo', '查看水单待办'], ['dashboard', 'payment-todo', '查看付款待办'], ['dashboard', 'exception-view', '查看财务异常'], ['dashboard', 'profit-view', '查看利润指标'], ['dashboard', 'view-all', '查看全公司汇总'],
-    ['customer-account', 'read', '查看客户账户与流水'],
-    ['receivable', 'read', '查看应收审核'], ['receivable', 'detail', '查看应收详情'], ['receivable', 'create', '新增应收'], ['receivable', 'update', '编辑应收'], ['receivable', 'audit', '审核应收'], ['receivable', 'batch-audit', '批量审核应收'], ['receivable', 'reverse', '反审核应收'], ['receivable', 'batch-reverse', '批量反审核应收'], ['receivable', 'void', '删除应收'], ['receivable', 'batch-void', '批量删除应收'], ['receivable', 'match-water', '匹配水单'], ['receivable', 'export', '导出应收'], ['receivable', 'view-sensitive', '查看应收敏感字段'], ['receivable', 'view-all', '查看全部应收'],
-    ['business-cost', 'detail', '查看业务成本详情'], ['business-cost', 'batch-audit', '批量审核业务成本'], ['business-cost', 'batch-reverse', '批量反审核业务成本'], ['business-cost', 'batch-void', '批量作废业务成本'], ['business-cost', 'view-sensitive', '查看业务成本敏感字段'],
-    ['payable', 'detail', '查看应付详情'], ['payable', 'match-shipment', '匹配应付运单'], ['payable', 'batch-audit', '批量审核应付'], ['payable', 'batch-reverse', '批量反审核应付'], ['payable', 'batch-void', '批量作废应付'], ['payable', 'attachment-view', '查看应付附件'], ['payable', 'attachment-upload', '上传应付附件'],
-    ['pending-payment', 'read', '查看待付款'], ['pending-payment', 'detail', '查看付款申请详情'], ['pending-payment', 'create', '生成付款申请'], ['pending-payment', 'update', '编辑付款申请'], ['pending-payment', 'cancel', '取消付款申请'], ['pending-payment', 'bank-select', '选择收款银行'], ['pending-payment', 'bank-manage', '维护收款银行'], ['pending-payment', 'bill-voucher-view', '查看供应商账单'], ['pending-payment', 'bill-voucher-upload', '上传供应商账单'], ['pending-payment', 'payment-voucher-view', '预览付款凭证'], ['pending-payment', 'payment-voucher-upload', '上传付款凭证'], ['pending-payment', 'export', '导出待付款'], ['pending-payment', 'view-sensitive', '查看敏感付款信息'],
-    ['paid-payment', 'read', '查看已付款'], ['paid-payment', 'detail', '查看已付款详情'], ['paid-payment', 'confirm', '确认付款'], ['paid-payment', 'update', '补充付款信息'], ['paid-payment', 'reverse', '反确认付款'], ['paid-payment', 'voucher-view', '查看付款凭证'], ['paid-payment', 'voucher-upload', '上传付款凭证'], ['paid-payment', 'voucher-delete', '删除付款凭证'], ['paid-payment', 'bank-view', '查看付款银行'], ['paid-payment', 'export', '导出已付款'], ['paid-payment', 'view-sensitive', '查看敏感付款信息'],
-    ['water-receipt', 'detail', '查看水单详情'], ['water-receipt', 'create', '新增水单'], ['water-receipt', 'update', '编辑水单'], ['water-receipt', 'reverse-archive', '反归档水单'], ['water-receipt', 'voucher-view', '查看水单凭证'], ['water-receipt', 'voucher-upload', '上传水单凭证'], ['water-receipt', 'voucher-delete', '删除水单凭证'], ['water-receipt', 'view-sensitive', '查看敏感收款信息'],
-    ['water-match', 'read', '查看水单匹配'], ['water-match', 'receivable-view', '查看可匹配应收'], ['water-match', 'create', '发起订单匹配'], ['water-match', 'audit', '审核订单匹配'], ['water-match', 'reverse', '反审核订单匹配'], ['water-match', 'cancel', '删除待审核匹配'], ['water-match', 'adjust', '编辑待审核匹配金额'], ['water-match', 'history-view', '查看匹配历史'], ['water-match', 'difference-view', '查看匹配差异'], ['water-match', 'export', '导出匹配结果'],
-    ['agent-bill', 'read', '查看代理账单'], ['agent-bill', 'detail', '查看代理账单详情'], ['agent-bill', 'import', '导入代理账单'], ['agent-bill', 'save', '保存代理账单'], ['agent-bill', 'difference-manage', '处理账单差异'], ['agent-bill', 'difference-resolve', '标记差异已处理'], ['agent-bill', 'archive', '归档代理账单'], ['agent-bill', 'reverse-archive', '反归档代理账单'], ['agent-bill', 'attachment-view', '查看代理账单附件'], ['agent-bill', 'attachment-upload', '上传代理账单附件'], ['agent-bill', 'export', '导出代理账单'], ['agent-bill', 'view-sensitive', '查看代理敏感结算信息']
+    ['dashboard', 'view', '查看'],
+    ['receivable', 'read', '查看'], ['receivable', 'create', '新增'], ['receivable', 'audit', '审核'], ['receivable', 'reverse', '反审核'], ['receivable', 'void', '删除'], ['receivable', 'export', '导出'], ['receivable', 'view-all', '查看全部数据'],
+    ['business-cost', 'read', '查看'], ['business-cost', 'manage', '新增和修改'], ['business-cost', 'audit', '审核'], ['business-cost', 'reverse', '反审核'], ['business-cost', 'void', '作废'], ['business-cost', 'export', '导出'], ['business-cost', 'view-all', '查看全部数据'], ['business-cost', 'view-agent', '查看代理信息'], ['business-cost', 'view-profit', '查看利润'],
+    ['payable', 'read', '查看'], ['payable', 'manage', '新增和修改'], ['payable', 'match-shipment', '匹配订单'], ['payable', 'audit', '审核'], ['payable', 'reverse', '反审核'], ['payable', 'void', '删除'], ['payable', 'export', '导出'], ['payable', 'view-sensitive', '查看应付金额和代理'], ['payable', 'view-profit', '查看利润'],
+    ['pending-payment', 'read', '查看'], ['pending-payment', 'create', '生成付款申请'], ['pending-payment', 'cancel', '撤回付款申请'], ['pending-payment', 'bank-select', '选择收款银行'], ['pending-payment', 'bank-manage', '维护收款银行'], ['pending-payment', 'bill-voucher-upload', '上传供应商账单'], ['pending-payment', 'export', '导出'],
+    ['paid-payment', 'read', '查看'], ['paid-payment', 'confirm', '确认支付'], ['paid-payment', 'update', '补充付款信息'], ['paid-payment', 'reverse', '反核销'], ['paid-payment', 'voucher-view', '查看付款凭证'], ['paid-payment', 'voucher-upload', '上传付款凭证'], ['paid-payment', 'bank-view', '查看付款银行'], ['paid-payment', 'export', '导出'],
+    ['water-receipt', 'read', '查看'], ['water-receipt', 'create', '新增'], ['water-receipt', 'update', '修改'], ['water-receipt', 'arrive', '确认到账'], ['water-receipt', 'archive', '归档'], ['water-receipt', 'void', '作废'], ['water-receipt', 'voucher-view', '查看凭证'], ['water-receipt', 'voucher-upload', '上传凭证'], ['water-receipt', 'voucher-delete', '删除凭证'], ['water-receipt', 'export', '导出'], ['water-receipt', 'view-all', '查看全部数据'],
+    ['water-match', 'read', '查看'], ['water-match', 'create', '匹配'], ['water-match', 'audit', '审核匹配'], ['water-match', 'reverse', '反审核匹配'], ['water-match', 'adjust', '修改待审核分配金额'], ['water-match', 'cancel', '删除待审核分配'], ['water-match', 'export', '导出'],
+    ['agent-bill', 'read', '查看'], ['agent-bill', 'import', '保存代理账单'], ['agent-bill', 'difference-resolve', '处理差异'], ['agent-bill', 'archive', '归档'], ['agent-bill', 'reverse-archive', '反归档']
   ].map(([section, action, label]) => ({ code: `finance:${section}:${action}` as PermissionKey, label, group: `财务管理 / ${({ dashboard: '财务看板', receivable: '应收审核', 'business-cost': '业务成本审核', payable: '市场应付审核', 'pending-payment': '待付款', 'paid-payment': '已付款', 'water-receipt': '水单到账查询', 'water-match': '水单匹配', 'agent-bill': '代理账单' } as Record<string, string>)[section]}` })),
+  { code: 'finance:customer-account:read', label: '查看客户账户与流水', group: '财务管理 / 客户账户', assignable: false },
   ...(
     ['kuayue', 'pickup', 'tally', 'purchase', 'delivery', 'hang', 'market-profit', 'warehouse-profit', 'finance-profit'] as const
   ).flatMap((section) => (
     ['read', 'create', 'update', 'confirm', 'audit', 'reverse-audit', 'void', 'match', 'hang', 'hang-approve', 'attachment-view', 'attachment-upload', 'export', 'view-payable', 'view-all', 'settlement-generate', 'settlement-audit', 'settlement-reverse'] as const
   ).map((action) => ({
     code: `misc-fee:${section}:${action}` as PermissionKey,
-    label: `${({ kuayue: '跨越账单', pickup: '提货费', tally: '理货杂费', purchase: '代购费', delivery: '送货费', hang: '挂账', 'market-profit': '市场利润结算', 'warehouse-profit': '仓库利润结算', 'finance-profit': '财务利润结算' } as Record<string, string>)[section]} / ${action}`,
-    group: `杂费 / ${({ kuayue: '跨越账单', pickup: '提货费', tally: '理货杂费', purchase: '代购费', delivery: '送货费', hang: '挂账', 'market-profit': '市场利润结算', 'warehouse-profit': '仓库利润结算', 'finance-profit': '财务利润结算' } as Record<string, string>)[section]}`
+    label: miscFeeActionLabels[action] ?? action,
+    group: `杂费 / ${({ kuayue: '跨越账单', pickup: '提货费', tally: '理货杂费', purchase: '代购费', delivery: '送货费', hang: '挂账', 'market-profit': '市场利润结算', 'warehouse-profit': '仓库利润结算', 'finance-profit': '财务利润结算' } as Record<string, string>)[section]}`,
+    assignable: miscFeeAssignableActions[section]?.includes(action) ? undefined : false
   }))),
-  { code: 'finance:business-cost:read', label: '业务员成本查看', group: '财务管理 / 业务成本审核' },
-  { code: 'finance:business-cost:manage', label: '业务员成本维护', group: '财务管理 / 业务成本审核' },
-  { code: 'finance:business-cost:audit', label: '业务员成本审核', group: '财务管理 / 业务成本审核' },
-  { code: 'finance:business-cost:reverse', label: '业务员成本反审核', group: '财务管理 / 业务成本审核' },
-  { code: 'finance:business-cost:void', label: '业务员成本作废', group: '财务管理 / 业务成本审核' },
-  { code: 'finance:business-cost:export', label: '业务员成本导出', group: '财务管理 / 业务成本审核' },
-  { code: 'finance:business-cost:view-all', label: '业务员成本查看全部', group: '财务管理 / 业务成本审核' },
-  { code: 'finance:business-cost:view-agent', label: '业务员成本查看代理', group: '财务管理 / 业务成本审核' },
-  { code: 'finance:business-cost:view-profit', label: '业务员成本查看利润', group: '财务管理 / 业务成本审核' },
   { code: 'finance:order-fee:payable:view', label: '单票费用查看应付', group: '财务管理 / 单票费用' },
   { code: 'finance:order-fee:payable:manage', label: '单票费用维护应付', group: '财务管理 / 单票费用' },
+  { code: 'finance:order-fee:receivable:manage', label: '兼容：单票费用维护应收', group: '财务管理 / 单票费用', assignable: false },
   { code: 'finance:order-fee:profit:receivable-payable', label: '单票费用应收应付利润', group: '财务管理 / 单票费用' },
   { code: 'finance:order-fee:profit:receivable-business', label: '单票费用应收业务利润', group: '财务管理 / 单票费用' },
   { code: 'finance:order-fee:profit:business-payable', label: '单票费用业务应付利润', group: '财务管理 / 单票费用' },
-  { code: 'finance:payable:read', label: '市场应付审核查看', group: '财务管理 / 市场应付审核' },
-  { code: 'finance:payable:manage', label: '应付费用维护', group: '财务管理 / 市场应付审核' },
-  { code: 'finance:payable:audit', label: '应付费用审核', group: '财务管理 / 市场应付审核' },
-  { code: 'finance:payable:reverse', label: '应付反审核', group: '财务管理 / 市场应付审核' },
-  { code: 'finance:payable:void', label: '应付作废', group: '财务管理 / 市场应付审核' },
-  { code: 'finance:payable:export', label: '应付导出', group: '财务管理 / 市场应付审核' },
-  { code: 'finance:payable:payment', label: '待付款维护', group: '财务管理 / 待付款' },
-  { code: 'finance:payable:bank', label: '代理银行维护', group: '财务管理 / 待付款' },
-  { code: 'finance:payable:attachment', label: '应付账单截图', group: '财务管理 / 市场应付审核' },
-  { code: 'finance:payable:view-sensitive', label: '应付敏感字段', group: '财务管理 / 市场应付审核' },
-  { code: 'finance:payable:view-profit', label: '应付利润查看', group: '财务管理 / 市场应付审核' },
-  { code: 'finance:water-receipt:read', label: '水单查看', group: '财务管理 / 水单到账查询' },
-  { code: 'finance:water-receipt:manage', label: '水单维护', group: '财务管理 / 水单到账查询' },
-  { code: 'finance:water-receipt:arrive', label: '水单到账确认', group: '财务管理 / 水单到账查询' },
-  { code: 'finance:water-receipt:match', label: '水单匹配应收', group: '财务管理 / 水单匹配' },
-  { code: 'finance:water-receipt:adjust', label: '已到账金额调整', group: '财务管理 / 水单到账查询' },
-  { code: 'finance:water-receipt:arrived-update', label: '已到账水单修改', group: '财务管理 / 水单到账查询' },
-  { code: 'finance:water-receipt:void', label: '水单作废', group: '财务管理 / 水单到账查询' },
-  { code: 'finance:water-receipt:archive', label: '水单归档', group: '财务管理 / 水单到账查询' },
-  { code: 'finance:water-receipt:export', label: '水单导出', group: '财务管理 / 水单到账查询' },
-  { code: 'finance:water-receipt:voucher', label: '水单凭证维护', group: '财务管理 / 水单到账查询' },
-  { code: 'finance:water-receipt:view-all', label: '水单查看全部', group: '财务管理 / 水单到账查询' },
   ...[
-    ['customers', 'read', '查看客户资料'], ['customers', 'view-own', '查看本人客户'], ['customers', 'view-all', '查看全部客户'], ['customers', 'detail', '查看客户详情'], ['customers', 'create', '新增客户'], ['customers', 'update', '编辑客户'], ['customers', 'assign-salesperson', '调整业务员归属'], ['customers', 'enable', '启用停用客户'], ['customers', 'delete', '删除客户'], ['customers', 'import', '导入客户'], ['customers', 'export', '导出客户'], ['customers', 'contacts-view', '查看收货人'], ['customers', 'contacts-manage', '维护收货人'], ['customers', 'contacts-disable', '停用收货人'], ['customers', 'user-create', '创建客户登录账号'], ['customers', 'view-sensitive', '查看客户敏感信息'], ['customers', 'list-setting', '保存客户列设置'],
+    ['customers', 'read', '查看客户资料'], ['customers', 'view-own', '查看本人客户'], ['customers', 'view-all', '查看全部客户'], ['customers', 'detail', '查看客户详情'], ['customers', 'create', '新增客户'], ['customers', 'update', '编辑客户'], ['customers', 'assign-salesperson', '调整业务员归属'], ['customers', 'enable', '启用停用客户'], ['customers', 'delete', '删除客户'], ['customers', 'import', '导入客户'], ['customers', 'export', '导出客户'], ['customers', 'contacts-view', '查看收货人'], ['customers', 'contacts-manage', '维护收货人'], ['customers', 'contacts-disable', '停用收货人'], ['customers', 'user-create', '创建客户登录账号'], ['customers', 'view-sensitive', '查看客户敏感信息'],
     ['finance', 'read', '查看财务资料'], ['finance', 'fee-name:create', '新增费用名称'], ['finance', 'fee-name:update', '编辑费用名称'], ['finance', 'fee-name:delete', '删除费用名称'], ['finance', 'fee-name:reorder', '调整费用名称排序'], ['finance', 'settlement:create', '新增结算方式'], ['finance', 'settlement:update', '编辑结算方式'], ['finance', 'settlement:delete', '删除结算方式'], ['finance', 'cargo-type:create', '新增货物类型'], ['finance', 'cargo-type:update', '编辑货物类型'], ['finance', 'cargo-type:delete', '删除货物类型'], ['finance', 'product-name:create', '新增品名'], ['finance', 'product-name:update', '编辑品名'], ['finance', 'product-name:delete', '删除品名'], ['finance', 'surcharge-manage', '维护附加费'], ['finance', 'surcharge-enable', '启用停用附加费'], ['finance', 'fuel-rate-manage', '维护燃油费率'], ['finance', 'view-sensitive', '查看财务资料敏感配置'],
-    ['payer-banks', 'read', '查看付款银行资料'], ['payer-banks', 'manage', '维护付款银行资料'],
-    ['agents', 'read', '查看代理资料'], ['agents', 'detail', '查看代理详情'], ['agents', 'create', '新增代理'], ['agents', 'update', '编辑代理'], ['agents', 'enable', '启用停用代理'], ['agents', 'batch-enable', '批量启用停用代理'], ['agents', 'delete', '删除代理'], ['agents', 'batch-delete', '批量删除代理'], ['agents', 'warehouse-view', '查看代理仓库'], ['agents', 'tracking-site-view', '查看代理查询网站'], ['agents', 'invoice-template-view', '查看发票模板'], ['agents', 'invoice-template-manage', '维护发票模板'], ['agents', 'bank-view', '查看代理银行'], ['agents', 'bank-manage', '维护代理银行'], ['agents', 'integration-type-view', '查看代理对接类型'], ['agents', 'list-setting', '保存代理列设置'],
+    ['payer-banks', 'read', '查看付款银行资料'], ['payer-banks', 'create', '新增付款银行'], ['payer-banks', 'update', '编辑付款银行'], ['payer-banks', 'delete', '删除付款银行'], ['payer-banks', 'manage', '兼容：维护付款银行资料'],
+    ['agents', 'read', '查看代理资料'], ['agents', 'detail', '查看代理详情'], ['agents', 'create', '新增代理'], ['agents', 'update', '编辑代理'], ['agents', 'enable', '启用停用代理'], ['agents', 'batch-enable', '批量启用停用代理'], ['agents', 'delete', '删除代理'], ['agents', 'batch-delete', '批量删除代理'], ['agents', 'warehouse-view', '查看代理仓库'], ['agents', 'tracking-site-view', '查看代理查询网站'], ['agents', 'invoice-template-view', '查看发票模板'], ['agents', 'invoice-template-manage', '维护发票模板'], ['agents', 'bank-view', '查看代理银行'], ['agents', 'bank-manage', '维护代理银行'], ['agents', 'integration-type-view', '查看代理对接类型'],
     ['agent-channels', 'read', '查看代理渠道'], ['agent-channels', 'filter-agent', '按代理筛选渠道'], ['agent-channels', 'create', '新增代理渠道'], ['agent-channels', 'update', '编辑代理渠道'], ['agent-channels', 'enable', '启用停用代理渠道'], ['agent-channels', 'delete', '删除代理渠道'],
     ['channels', 'read', '查看公司渠道'], ['channels', 'create', '新增公司渠道'], ['channels', 'update', '编辑公司渠道'], ['channels', 'enable', '启用停用公司渠道'], ['channels', 'delete', '删除公司渠道'], ['channels', 'batch-delete', '批量删除公司渠道'], ['channels', 'carrier-manage', '维护承运商'], ['channels', 'carrier-enable', '启用停用承运商'], ['channels', 'business-type-manage', '维护业务类型'], ['channels', 'category-manage', '维护渠道类别'], ['channels', 'volume-rule-manage', '维护除材积'], ['channels', 'weight-rule-manage', '维护多件重量规则'], ['channels', 'settlement-rule-manage', '维护结算重量规则'], ['channels', 'large-cargo-rule-manage', '维护大货起始重量'], ['channels', 'remote-rule-manage', '维护偏远规则'],
     ['channel-categories', 'read', '查看渠道类别'], ['channel-categories', 'create', '新增渠道类别'], ['channel-categories', 'update', '编辑渠道类别'], ['channel-categories', 'enable', '启用停用渠道类别'], ['channel-categories', 'delete', '删除渠道类别'],
     ['remote-areas', 'read', '查看偏远规则'], ['remote-areas', 'file-view', '查看偏远附件'], ['remote-areas', 'file-upload', '上传偏远附件'], ['remote-areas', 'file-delete', '删除偏远附件'], ['remote-areas', 'file-paste-upload', '粘贴上传偏远附件'], ['remote-areas', 'rule-manage', '维护偏远规则'],
     ['exchange-rates', 'read', '查看当前汇率'], ['exchange-rates', 'history-view', '查看历史汇率'], ['exchange-rates', 'create', '新增历史汇率'], ['exchange-rates', 'update', '修改历史汇率'], ['exchange-rates', 'disable', '停用历史汇率'], ['exchange-rates', 'period-view', '查看汇率生效区间'], ['exchange-rates', 'export', '导出汇率记录'],
     ['assistant', 'read', '查看资料辅助'], ['assistant', 'ai-check', '执行 AI 资料体检'], ['assistant', 'missing-warning-view', '查看资料缺失提醒'], ['assistant', 'stats-view', '查看资料快捷统计'], ['assistant', 'suggestion-generate', '生成维护建议']
-  ].map(([section, action, label]) => ({ code: `master-data:${section}:${action}` as PermissionKey, label, group: `基础资料库 / ${({ customers: '客户资料', finance: '财务资料', 'payer-banks': '付款银行资料', agents: '代理资料', 'agent-channels': '代理渠道', channels: '公司渠道', 'channel-categories': '渠道类别', 'remote-areas': '偏远', 'exchange-rates': '汇率', assistant: '资料辅助' } as Record<string, string>)[section]}` })),
+  ].map(([section, action, label]) => {
+    const code = `master-data:${section}:${action}` as PermissionKey;
+    const legacyRuntimeOnly = new Set<PermissionKey>([
+      'master-data:customers:detail', 'master-data:customers:assign-salesperson', 'master-data:customers:enable', 'master-data:customers:import',
+      'master-data:customers:contacts-view', 'master-data:customers:contacts-disable', 'master-data:customers:user-create', 'master-data:customers:view-sensitive',
+      'master-data:payer-banks:manage',
+      'master-data:finance:surcharge-manage', 'master-data:finance:surcharge-enable',
+      'master-data:finance:fuel-rate-manage', 'master-data:finance:view-sensitive',
+      'master-data:agents:detail', 'master-data:agents:enable', 'master-data:agents:batch-enable',
+      'master-data:agents:batch-delete', 'master-data:agents:warehouse-view',
+      'master-data:agents:tracking-site-view', 'master-data:agents:invoice-template-view', 'master-data:agents:bank-view',
+      'master-data:agents:invoice-template-manage', 'master-data:agents:bank-manage',
+      'master-data:agents:integration-type-view',
+      'master-data:agent-channels:filter-agent', 'master-data:agent-channels:enable',
+      'master-data:channels:enable', 'master-data:channels:batch-delete',
+      'master-data:channels:carrier-manage', 'master-data:channels:carrier-enable',
+      'master-data:channels:business-type-manage', 'master-data:channels:category-manage',
+      'master-data:channels:volume-rule-manage', 'master-data:channels:weight-rule-manage',
+      'master-data:channels:settlement-rule-manage', 'master-data:channels:large-cargo-rule-manage',
+      'master-data:channels:remote-rule-manage', 'master-data:channel-categories:enable',
+      'master-data:remote-areas:file-view', 'master-data:remote-areas:file-paste-upload',
+      'master-data:remote-areas:rule-manage',
+      'master-data:exchange-rates:history-view', 'master-data:exchange-rates:period-view',
+      'master-data:exchange-rates:export',
+      'master-data:assistant:missing-warning-view', 'master-data:assistant:stats-view'
+    ]);
+    return { code, label: legacyRuntimeOnly.has(code) ? `兼容：${label}` : label, group: `基础资料库 / ${({ customers: '客户资料', finance: '财务资料', 'payer-banks': '付款银行资料', agents: '代理资料', 'agent-channels': '代理渠道', channels: '公司渠道', 'channel-categories': '渠道类别', remote: '偏远', 'remote-areas': '偏远', 'exchange-rates': '汇率', assistant: '资料辅助' } as Record<string, string>)[section]}`, assignable: legacyRuntimeOnly.has(code) ? false : undefined };
+  }),
   ...[
     ['user-groups', 'read', '查看用户组'], ['user-groups', 'detail', '查看用户组详情'], ['user-groups', 'create', '新建用户组'], ['user-groups', 'update', '编辑用户组'], ['user-groups', 'enable', '启用停用用户组'], ['user-groups', 'delete', '删除用户组'], ['user-groups', 'create-from-template', '从模板创建用户组'], ['user-groups', 'staff-view', '查看用户组绑定员工'], ['user-groups', 'audit-view', '查看用户组审计日志'], ['user-groups', 'export', '导出用户组'],
     ['accounts', 'read', '查看员工账号'], ['accounts', 'filter', '筛选员工账号'], ['accounts', 'create', '新建员工账号'], ['accounts', 'update-profile', '编辑员工资料'], ['accounts', 'update-role', '修改员工用户组'], ['accounts', 'update-site', '修改员工站点'], ['accounts', 'enable', '启用停用员工账号'], ['accounts', 'delete', '删除员工账号'], ['accounts', 'reset-password', '重置员工密码'], ['accounts', 'import', '导入员工账号'], ['accounts', 'export', '导出员工账号'], ['accounts', 'view-sensitive', '查看员工敏感资料'], ['accounts', 'must-change-password-view', '查看需改密账号'], ['accounts', 'incomplete-view', '查看资料未完善账号'],
@@ -1046,7 +1096,7 @@ const warehouseBasePermissions: PermissionKey[] = [
   'warehouse:dashboard:view',
   'warehouse:today-receipt:view', 'warehouse:today-receipt:edit', 'warehouse:today-receipt:delete', 'warehouse:today-receipt:manual-create', 'warehouse:today-receipt:import', 'warehouse:today-receipt:export',
   'warehouse:in-stock:view', 'warehouse:in-stock:edit', 'warehouse:in-stock:delete', 'warehouse:in-stock:split', 'warehouse:in-stock:tally', 'warehouse:in-stock:order-entry', 'warehouse:in-stock:import', 'warehouse:in-stock:export',
-  'warehouse:tally-pending:view', 'warehouse:tally-pending:edit', 'warehouse:tally-pending:cancel', 'warehouse:tally-pending:process', 'warehouse:tally-pending:complete-and-ship',
+  'warehouse:tally-pending:view', 'warehouse:tally-pending:detail', 'warehouse:tally-pending:edit', 'warehouse:tally-pending:start', 'warehouse:tally-pending:process', 'warehouse:tally-pending:restart', 'warehouse:tally-pending:sort-rule-manage', 'warehouse:tally-pending:problem-view', 'warehouse:tally-pending:shipment-create',
   'warehouse:tally-completed:view', 'warehouse:tally-completed:print', 'warehouse:tally-completed:download', 'warehouse:tally-completed:scan', 'warehouse:tally-completed:reverse', 'warehouse:tally-completed:correct',
   'warehouse:dispatch-pending:view', 'warehouse:dispatch-pending:edit', 'warehouse:dispatch-pending:handover-print', 'warehouse:dispatch-pending:label-manage', 'warehouse:dispatch-pending:shipping-mark-confirm', 'warehouse:dispatch-pending:confirm',
   'warehouse:outbounded:view', 'warehouse:outbounded:export',
@@ -1055,10 +1105,10 @@ const warehouseBasePermissions: PermissionKey[] = [
 
 const marketBasePermissions: PermissionKey[] = [
   'business:shipment:agent-weight-view',
-  'market:dashboard:view', 'market:dashboard:pending-summary', 'market:dashboard:routed-summary', 'market:dashboard:weekly-summary', 'market:dashboard:agent-stats-view', 'market:dashboard:channel-mode-stats-view', 'market:dashboard:sensitive-summary-view',
-  'market:pending-routing:view', 'market:pending-routing:detail', 'market:pending-routing:assign', 'market:pending-routing:save-draft', 'market:pending-routing:confirm', 'market:pending-routing:audit', 'market:pending-routing:update', 'market:pending-routing:delete', 'market:pending-routing:operation-log-view', 'market:pending-routing:business-cost-view', 'market:pending-routing:payable-cost-view', 'market:pending-routing:agent-channel-view', 'market:pending-routing:cost-field-view', 'market:pending-routing:column-setting',
-  'market:routed:view', 'market:routed:detail', 'market:routed:update', 'market:routed:reroute', 'market:routed:log-view', 'market:routed:agent-cost-view', 'market:routed:cost-total-view', 'market:routed:agent-channel-view', 'market:routed:column-setting',
-  'market:weekly-routing:view', 'market:weekly-routing:detail', 'market:weekly-routing:agent-stats-view', 'market:weekly-routing:channel-mode-stats-view', 'market:weekly-routing:cost-view', 'market:weekly-routing:reroute-stats-view', 'market:weekly-routing:sensitive-stats-view', 'market:weekly-routing:column-setting'
+  'market:dashboard:view',
+  'market:pending-routing:view', 'market:pending-routing:route', 'market:pending-routing:edit', 'market:pending-routing:approve', 'market:pending-routing:operation-log:view', 'market:pending-routing:business-cost:view', 'market:pending-routing:business-cost:create', 'market:pending-routing:business-cost:edit', 'market:pending-routing:business-cost:delete', 'market:pending-routing:payable-cost:view', 'market:pending-routing:payable-cost:create', 'market:pending-routing:payable-cost:edit', 'market:pending-routing:payable-cost:delete', 'market:pending-routing:return-review',
+  'market:routed:view', 'market:routed:reroute', 'market:routed:replace-agent', 'market:routed:routing-log:view',
+  'market:routing-report:view', 'market:routing-report:export'
 ];
 
 const customerServiceBasePermissions: PermissionKey[] = permissionDefinitions
@@ -1071,27 +1121,27 @@ const financeFunctionPermissions: PermissionKey[] = permissionDefinitions
   .map((permission) => permission.code);
 
 const miscFeeAllPermissions: PermissionKey[] = permissionDefinitions
-  .filter((permission) => permission.code.startsWith('misc-fee:'))
+  .filter((permission) => permission.assignable !== false && permission.code.startsWith('misc-fee:'))
   .map((permission) => permission.code);
 
 const miscFeeBusinessPermissions: PermissionKey[] = [
-  'misc-fee:kuayue:read', 'misc-fee:kuayue:update', 'misc-fee:kuayue:confirm', 'misc-fee:kuayue:match', 'misc-fee:kuayue:hang', 'misc-fee:kuayue:attachment-view',
-  'misc-fee:pickup:read', 'misc-fee:pickup:confirm', 'misc-fee:pickup:match', 'misc-fee:pickup:attachment-view',
-  'misc-fee:tally:read', 'misc-fee:tally:match',
-  'misc-fee:purchase:read', 'misc-fee:purchase:create', 'misc-fee:purchase:update', 'misc-fee:purchase:void', 'misc-fee:purchase:confirm', 'misc-fee:purchase:hang', 'misc-fee:purchase:attachment-view', 'misc-fee:purchase:attachment-upload',
+  'misc-fee:kuayue:read', 'misc-fee:kuayue:update', 'misc-fee:kuayue:hang', 'misc-fee:kuayue:attachment-view',
+  'misc-fee:pickup:read', 'misc-fee:pickup:match', 'misc-fee:pickup:attachment-view',
+  'misc-fee:tally:read',
+  'misc-fee:purchase:read', 'misc-fee:purchase:create', 'misc-fee:purchase:update', 'misc-fee:purchase:void', 'misc-fee:purchase:hang', 'misc-fee:purchase:attachment-view', 'misc-fee:purchase:attachment-upload',
   'misc-fee:delivery:read',
   'misc-fee:hang:read'
 ];
 
 const miscFeeWarehousePermissions: PermissionKey[] = [
-  'misc-fee:pickup:read', 'misc-fee:pickup:create', 'misc-fee:pickup:update', 'misc-fee:pickup:confirm', 'misc-fee:pickup:match', 'misc-fee:pickup:hang', 'misc-fee:pickup:attachment-view', 'misc-fee:pickup:attachment-upload', 'misc-fee:pickup:view-payable',
-  'misc-fee:tally:read', 'misc-fee:tally:create', 'misc-fee:tally:update', 'misc-fee:tally:void', 'misc-fee:tally:confirm', 'misc-fee:tally:match', 'misc-fee:tally:hang', 'misc-fee:tally:attachment-view', 'misc-fee:tally:attachment-upload', 'misc-fee:tally:view-payable',
+  'misc-fee:pickup:read', 'misc-fee:pickup:create', 'misc-fee:pickup:update', 'misc-fee:pickup:match', 'misc-fee:pickup:hang', 'misc-fee:pickup:attachment-view', 'misc-fee:pickup:attachment-upload',
+  'misc-fee:tally:read', 'misc-fee:tally:create', 'misc-fee:tally:update', 'misc-fee:tally:void', 'misc-fee:tally:confirm', 'misc-fee:tally:hang', 'misc-fee:tally:attachment-view', 'misc-fee:tally:attachment-upload',
   'misc-fee:warehouse-profit:read', 'misc-fee:warehouse-profit:settlement-generate'
 ];
 
 const miscFeeMarketPermissions: PermissionKey[] = [
-  'misc-fee:pickup:read', 'misc-fee:pickup:create', 'misc-fee:pickup:update', 'misc-fee:pickup:confirm', 'misc-fee:pickup:match', 'misc-fee:pickup:hang', 'misc-fee:pickup:attachment-view', 'misc-fee:pickup:attachment-upload', 'misc-fee:pickup:view-payable',
-  'misc-fee:delivery:read', 'misc-fee:delivery:create', 'misc-fee:delivery:update', 'misc-fee:delivery:confirm', 'misc-fee:delivery:hang', 'misc-fee:delivery:attachment-view', 'misc-fee:delivery:attachment-upload', 'misc-fee:delivery:view-payable',
+  'misc-fee:pickup:read', 'misc-fee:pickup:create', 'misc-fee:pickup:update', 'misc-fee:pickup:match', 'misc-fee:pickup:hang', 'misc-fee:pickup:attachment-view', 'misc-fee:pickup:attachment-upload',
+  'misc-fee:delivery:read', 'misc-fee:delivery:create', 'misc-fee:delivery:confirm', 'misc-fee:delivery:match', 'misc-fee:delivery:hang', 'misc-fee:delivery:attachment-view', 'misc-fee:delivery:attachment-upload',
   'misc-fee:market-profit:read', 'misc-fee:market-profit:settlement-generate'
 ];
 
@@ -1129,22 +1179,15 @@ const masterDataReferencePermissions: PermissionKey[] = [
 
 const businessMasterDataReferencePermissions: PermissionKey[] = [
   'data-scope:sales-own',
-  'business:shipment:finance-detail-view',
   'business:order-entry:edit',
   'business:order-entry:business-cost',
   'business:order-entry:payable-fee',
   'master-data:customers:read',
   'master-data:customers:view-own',
-  'master-data:customers:detail',
   'master-data:customers:create',
   'master-data:customers:update',
-  'master-data:customers:enable',
   'master-data:customers:delete',
-  'master-data:customers:contacts-view',
   'master-data:customers:contacts-manage',
-  'master-data:customers:contacts-disable',
-  'master-data:customers:user-create',
-  'master-data:customers:list-setting',
   'master-data:finance:read',
   'master-data:channels:read',
   'master-data:channel-categories:read',
@@ -1158,10 +1201,10 @@ const lineShipmentStageEditPermissions: PermissionKey[] = [
 
 export const rolePermissions: Record<BuiltinRoleKey, PermissionKey[]> = {
   ADMIN: allRuntimePermissions(),
-  CUSTOMER_SERVICE: [...pricingLookupBusinessPermissions, ...masterDataReferencePermissions, 'tracking:external:view', 'tracking:external:latest-view', 'tracking:external:stale-days-view', 'tracking:external:detail', ...customerServiceBasePermissions],
-  OPERATOR: [...pricingLookupBusinessPermissions, ...lineShipmentStageEditPermissions, 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'finance:water-receipt:detail', 'finance:water-receipt:create', 'finance:water-receipt:update', 'finance:water-receipt:voucher-view', 'finance:water-receipt:voucher-upload', 'finance:water-receipt:voucher-delete', 'finance:water-match:read', 'finance:water-match:receivable-view', ...businessMasterDataReferencePermissions, 'operations:line-shipment:view', 'operations:line-shipment:detail', 'operations:line-shipment:process', 'operations:line-shipment:status-update', 'operations:line-shipment:tracking-add', 'operations:line-shipment:problem-create', 'operations:line-shipment:import', 'operations:line-shipment:internal-log-view', 'operations:ai-queue:view', 'operations:ai-queue:assist', 'operations:ai-queue:mark-read', 'operations:ai-queue:handle', 'operations:product-map:view', 'operations:product-map:route-view', 'operations:import-quality:view', 'operations:import-quality:upload', 'operations:import-quality:retry', 'operations:import-quality:error-detail-view', 'operations:import-quality:confirm', 'business:dashboard:view', 'business:dashboard:trend-view', 'business:dashboard:pending-review-summary', 'business:order-entry:view', 'business:order-entry:warehouse-package-select', 'business:order-entry:create', 'business:order-entry:draft-view', 'business:order-entry:draft-edit', 'business:order-entry:draft-delete', 'business:order-entry:submit-review', 'business:order-entry:invoice-upload', 'business:order-entry:label-upload', 'business:order-fee:view', 'business:order-fee:create', 'business:order-fee:update', 'business:order-fee:delete', 'business:review:view', 'business:review:edit', 'business:shipment:list', 'business:shipment:detail', 'business:shipment:self-view', 'business:shipment:update-basic', 'business:shipment:tracking-add', 'business:shipment:problem-create', 'business:shipment:column-setting', 'business:order-ai:view', 'business:order-ai:assist', 'warehouse:in-stock:view'],
+  CUSTOMER_SERVICE: [...pricingLookupBusinessPermissions, ...masterDataReferencePermissions, 'tracking:external:view', 'tracking:external:detail', ...customerServiceBasePermissions],
+  OPERATOR: [...pricingLookupBusinessPermissions, ...lineShipmentStageEditPermissions, 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'finance:water-receipt:create', 'finance:water-receipt:update', 'finance:water-receipt:voucher-view', 'finance:water-receipt:voucher-upload', 'finance:water-receipt:voucher-delete', 'finance:water-match:read', ...businessMasterDataReferencePermissions, 'operations:line-shipment:view', 'operations:line-shipment:detail', 'operations:line-shipment:process', 'operations:line-shipment:status-update', 'operations:line-shipment:tracking-add', 'operations:line-shipment:problem-create', 'operations:line-shipment:import', 'operations:line-shipment:internal-log-view', 'operations:ai-queue:view', 'operations:ai-queue:assist', 'operations:ai-queue:mark-read', 'operations:ai-queue:handle', 'operations:product-map:view', 'operations:product-map:route-view', 'operations:import-quality:view', 'operations:import-quality:upload', 'operations:import-quality:retry', 'operations:import-quality:error-detail-view', 'operations:import-quality:confirm', 'business:dashboard:view', 'business:dashboard:trend-view', 'business:dashboard:pending-review-summary', 'business:order-entry:view', 'business:order-entry:warehouse-package-select', 'business:order-entry:create', 'business:order-entry:draft-view', 'business:order-entry:draft-edit', 'business:order-entry:draft-delete', 'business:order-entry:submit-review', 'business:order-entry:invoice-upload', 'business:order-entry:label-upload', 'business:order-fee:view', 'business:order-fee:create', 'business:order-fee:update', 'business:order-fee:delete', 'business:review:view', 'business:review:edit', 'business:shipment:list', 'business:shipment:detail', 'business:shipment:self-view', 'business:shipment:update-basic', 'business:shipment:tracking-add', 'business:shipment:problem-create', 'business:order-ai:view', 'business:order-ai:assist', 'warehouse:in-stock:view'],
   WAREHOUSE: ['operations:line-shipment:view', 'operations:line-shipment:detail', ...lineShipmentStageEditPermissions, ...warehouseBasePermissions],
-  FINANCE: ['business:shipment:list', 'business:shipment:agent-weight-view', ...pricingLookupBusinessPermissions, ...financeFunctionPermissions, 'master-data:finance:read', 'master-data:payer-banks:read', 'master-data:payer-banks:manage', 'master-data:agents:read', 'master-data:agents:bank-view', 'master-data:exchange-rates:read'],
+  FINANCE: ['business:shipment:list', ...pricingLookupBusinessPermissions, ...financeFunctionPermissions, 'master-data:finance:read', 'master-data:payer-banks:read', 'master-data:payer-banks:create', 'master-data:payer-banks:update', 'master-data:payer-banks:delete', 'master-data:agents:read', 'master-data:exchange-rates:read'],
   CUSTOMER: [
     'business:order-entry:create',
     'business:shipment:list',
@@ -1177,6 +1220,9 @@ export const rolePermissions: Record<BuiltinRoleKey, PermissionKey[]> = {
 
 rolePermissions.OPERATOR.push('warehouse:in-stock:import');
 rolePermissions.OPERATOR.push(...miscFeeBusinessPermissions);
+// Owner/manager order-fee deletion is intentionally not a default capability;
+// existing approval/void workflows remain the supported deletion paths.
+rolePermissions.OPERATOR = rolePermissions.OPERATOR.filter((permission) => permission !== 'business:order-fee:delete');
 rolePermissions.WAREHOUSE.push('data-scope:misc-fee-warehouse-site', ...miscFeeWarehousePermissions);
 rolePermissions.FINANCE.push('data-scope:misc-fee-all', ...miscFeeAllPermissions);
 
@@ -1255,10 +1301,34 @@ export function isSalesScopedRole(role: string): boolean {
   ].includes(role);
 }
 
+export function isFinanceFullScopeRole(role: string): boolean {
+  return role === 'FINANCE' || role === 'UG_FINANCE' || role === 'UG_PAYABLE_FINANCE';
+}
+
 export function isBusinessAgentRestrictedRole(role: string): boolean {
   return isSalesScopedRole(role) && role !== 'UG_MARKET';
 }
 
+export function isWarehouseWideScopePrincipal(
+  principal: Pick<Principal, 'role' | 'assignedRole' | 'roleLabel' | 'dataScope'>
+): boolean {
+  if (isAdministratorRole(principal.role)) return true;
+  const effectiveRole = principal.assignedRole ?? principal.role;
+  if (['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND', 'UG_MARKET'].includes(effectiveRole)) {
+    return true;
+  }
+  if (principal.dataScope === 'SALES_OWN') return false;
+  if (isBusinessAgentRestrictedRole(effectiveRole)) return false;
+  const label = principal.roleLabel?.trim() ?? '';
+  if (label.includes('业务')) return false;
+  return label === '仓库理货';
+}
+
+/**
+ * Individual business roles must stay on their own-customer data scope.
+ * Managers/supervisors intentionally keep their team scope and are not in
+ * this list; a role must opt into those broader grants explicitly.
+ */
 export function isBusinessAgentOwnOnlyRole(role: string): boolean {
   return [
     'OPERATOR',
@@ -1270,34 +1340,187 @@ export function isBusinessAgentOwnOnlyRole(role: string): boolean {
 }
 
 function isBusinessAgentCrossScopePermission(permission: PermissionKey): boolean {
-  return /(?:^|:)(?:all-view|team-view|view-all|all-order-context|scope-all)$/.test(permission);
+  return /(?:^|:)(?:all-view|team-view|view-all|all-order-context|scope-(?:team|site|all))$/.test(permission);
 }
 
-const uiPreferencePermissionDependencies = {
-  'business:shipment:column-setting': 'business:shipment:list',
-  'market:pending-routing:column-setting': 'market:pending-routing:view',
-  'market:routed:column-setting': 'market:routed:view',
-  'market:weekly-routing:column-setting': 'market:weekly-routing:view',
-  'tracking:carrier-task:column-setting': 'tracking:carrier-task:view',
-  'tracking:external:column-setting': 'tracking:external:view',
-  'customer-service:data-confirm:column-setting': 'customer-service:data-confirm:view',
-  'customer-service:transfer:column-setting': 'customer-service:transfer:view',
-  'customer-service:pending-routing:column-setting': 'customer-service:pending-routing:view',
-  'customer-service:waiting-departure:column-setting': 'customer-service:waiting-departure:view',
-  'customer-service:departed:column-setting': 'customer-service:departed:view',
-  'customer-service:arrived-port:column-setting': 'customer-service:arrived-port:view',
-  'customer-service:delivering:column-setting': 'customer-service:delivering:view',
-  'customer-service:signed:column-setting': 'customer-service:signed:view',
-  'customer-service:problem:column-setting': 'customer-service:problem:view',
-  'master-data:customers:list-setting': 'master-data:customers:read',
-  'master-data:agents:list-setting': 'master-data:agents:read'
-} satisfies Partial<Record<PermissionKey, PermissionKey>>;
+function isBusinessAgentBroadScopeRole(role: string): boolean {
+  return role === 'UG_BUSINESS_MANAGER' || role === 'UG_BUSINESS_SUPERVISOR';
+}
 
-export function withImpliedUiPreferencePermissions(permissions: readonly PermissionKey[]): PermissionKey[] {
+/**
+ * Transitional runtime aliases for permissions that no longer appear in the
+ * role editor or database catalog.  Existing page code can keep asking its
+ * historical field/action question while the persisted contract stays on the
+ * user-observable page/action permission.  Global denies run after expansion,
+ * so a total-rule mask still removes the corresponding field and write path.
+ */
+const legacyRuntimePermissionsByCanonical: Partial<Record<PermissionKey, readonly PermissionKey[]>> = {
+  'business:dashboard:view': [
+    'business:dashboard:trend-view',
+    'business:dashboard:pending-review-summary'
+  ],
+  'business:shipment:list': [
+    'business:shipment:finance-detail-view',
+    'business:shipment:receivable-view',
+    'business:shipment:payable-view',
+    'business:shipment:profit-view',
+    'business:shipment:agent-weight-view'
+  ],
+  'business:order-ai:assist': ['business:order-ai:finance-context'],
+  'tracking:carrier-task:view': [
+    'tracking:carrier-task:detail',
+    'tracking:carrier-task:error-view',
+    'tracking:carrier-task:log-view'
+  ],
+  'tracking:carrier-task:sync': [
+    'tracking:carrier-task:run',
+    'tracking:carrier-task:retry'
+  ],
+  'tracking:external:view': [
+    'tracking:external:latest-view',
+    'tracking:external:stale-days-view'
+  ],
+  'tracking:external:import': [
+    'tracking:external:single-add',
+    'tracking:external:import-upload',
+    'tracking:external:import-preview',
+    'tracking:external:import-confirm',
+    'tracking:external:import-error-view',
+    'tracking:external:unmatched-view',
+    'tracking:external:overwrite'
+  ],
+  'master-data:customers:read': [
+    'master-data:customers:detail',
+    'master-data:customers:contacts-view',
+    'master-data:customers:view-sensitive'
+  ],
+  'master-data:finance:read': ['master-data:finance:view-sensitive'],
+  'master-data:agents:read': [
+    'master-data:agents:detail',
+    'master-data:agents:warehouse-view',
+    'master-data:agents:tracking-site-view',
+    'master-data:agents:invoice-template-view',
+    'master-data:agents:bank-view',
+    'master-data:agents:integration-type-view'
+  ],
+  'master-data:agents:create': [
+    'master-data:agents:invoice-template-manage',
+    'master-data:agents:bank-manage'
+  ],
+  'master-data:agents:update': [
+    'master-data:agents:enable',
+    'master-data:agents:batch-enable',
+    'master-data:agents:invoice-template-manage',
+    'master-data:agents:bank-manage'
+  ],
+  'master-data:agents:delete': ['master-data:agents:batch-delete'],
+  'master-data:agent-channels:read': ['master-data:agent-channels:filter-agent'],
+  'master-data:agent-channels:update': ['master-data:agent-channels:enable'],
+  'master-data:channels:create': [
+    'master-data:channels:carrier-manage',
+    'master-data:channels:business-type-manage',
+    'master-data:channels:category-manage',
+    'master-data:channels:volume-rule-manage',
+    'master-data:channels:weight-rule-manage',
+    'master-data:channels:settlement-rule-manage',
+    'master-data:channels:large-cargo-rule-manage',
+    'master-data:channels:remote-rule-manage'
+  ],
+  'master-data:channels:update': [
+    'master-data:channels:enable',
+    'master-data:channels:carrier-manage',
+    'master-data:channels:carrier-enable',
+    'master-data:channels:business-type-manage',
+    'master-data:channels:category-manage',
+    'master-data:channels:volume-rule-manage',
+    'master-data:channels:weight-rule-manage',
+    'master-data:channels:settlement-rule-manage',
+    'master-data:channels:large-cargo-rule-manage',
+    'master-data:channels:remote-rule-manage'
+  ],
+  'master-data:channels:delete': ['master-data:channels:batch-delete'],
+  'master-data:channel-categories:update': ['master-data:channel-categories:enable'],
+  'master-data:exchange-rates:read': [
+    'master-data:exchange-rates:history-view',
+    'master-data:exchange-rates:period-view'
+  ],
+  'master-data:assistant:read': [
+    'master-data:assistant:missing-warning-view',
+    'master-data:assistant:stats-view'
+  ]
+};
+
+for (const section of ['kuayue', 'pickup', 'tally', 'purchase', 'delivery', 'hang', 'market-profit', 'warehouse-profit', 'finance-profit']) {
+  legacyRuntimePermissionsByCanonical[`misc-fee:${section}:read` as PermissionKey] = [
+    `misc-fee:${section}:view-payable` as PermissionKey
+  ];
+}
+
+export function withImpliedLegacyRuntimePermissions(permissions: readonly PermissionKey[]): PermissionKey[] {
   const next = new Set(permissions);
-  Object.entries(uiPreferencePermissionDependencies).forEach(([impliedPermission, sourcePermission]) => {
-    if (next.has(sourcePermission as PermissionKey)) next.add(impliedPermission as PermissionKey);
-  });
+  for (const [canonical, aliases] of Object.entries(legacyRuntimePermissionsByCanonical)) {
+    if (!next.has(canonical as PermissionKey)) continue;
+    for (const alias of aliases ?? []) next.add(alias);
+  }
+  return [...next];
+}
+
+function withImpliedTargetPageViewPermissions(permissions: readonly PermissionKey[]): PermissionKey[] {
+  const next = new Set(permissions);
+  const pageViews: Array<[string, PermissionKey]> = [
+    ['business:dashboard:', 'business:dashboard:view'],
+    ['business:shipment:', 'business:shipment:list'],
+    ['business:order-ai:', 'business:order-ai:view'],
+    ['operations:line-shipment:', 'operations:line-shipment:view'],
+    ['operations:ai-queue:', 'operations:ai-queue:view'],
+    ['operations:product-map:', 'operations:product-map:view'],
+    ['operations:import-quality:', 'operations:import-quality:view'],
+    ['tracking:carrier-task:', 'tracking:carrier-task:view'],
+    ['tracking:external:', 'tracking:external:view'],
+    ['system:announcements:', 'system:announcements:read'],
+    ['system:notifications:', 'system:notifications:operations-read'],
+    ...(['kuayue', 'pickup', 'tally', 'purchase', 'delivery', 'hang', 'market-profit', 'warehouse-profit', 'finance-profit'] as const)
+      .map((section) => [`misc-fee:${section}:`, `misc-fee:${section}:read` as PermissionKey] as [string, PermissionKey]),
+    ...(['customers', 'finance', 'payer-banks', 'agents', 'agent-channels', 'channels', 'channel-categories', 'remote-areas', 'exchange-rates', 'assistant'] as const)
+      .map((section) => [`master-data:${section}:`, `master-data:${section}:read` as PermissionKey] as [string, PermissionKey])
+  ];
+  for (const [prefix, view] of pageViews) {
+    const hasAssignableAction = permissionDefinitions.some((definition) => (
+      definition.assignable !== false
+      && definition.code !== view
+      && definition.code.startsWith(prefix)
+      && !definition.code.includes('-block')
+      && !definition.code.includes(':block:')
+      && next.has(definition.code)
+    ));
+    if (hasAssignableAction) next.add(view);
+  }
+  return [...next];
+}
+
+/**
+ * Customer-service actions are independently assignable, but every action
+ * still needs its module view permission.  Keeping this dependency in the
+ * canonical RBAC normalizer means a single checkbox is sufficient and the
+ * API cannot accidentally persist a dead action without its parent entry.
+ * Legacy `*-block` permissions are deliberately ignored; they remain
+ * non-assignable compatibility records until a separately reviewed migration.
+ */
+export function withImpliedCustomerServiceViewPermissions(permissions: readonly PermissionKey[]): PermissionKey[] {
+  const assignableCodes = new Set(
+    permissionDefinitions
+      .filter((permission) => permission.assignable !== false)
+      .map((permission) => permission.code)
+  );
+  const next = new Set(permissions);
+  for (const permission of [...next]) {
+    if (!permission.startsWith('customer-service:') || permission.endsWith('-block')) continue;
+    const separator = permission.lastIndexOf(':');
+    if (separator <= 'customer-service:'.length) continue;
+    if (permission.slice(separator + 1) === 'view') continue;
+    const viewPermission = `${permission.slice(0, separator)}:view` as PermissionKey;
+    if (assignableCodes.has(viewPermission)) next.add(viewPermission);
+  }
   return [...next];
 }
 
@@ -1315,6 +1538,9 @@ function withImpliedOperationalPermissions(permissions: readonly PermissionKey[]
   for (const permission of [...next]) {
     const match = /^(warehouse:[^:]+):(.+)$/.exec(permission);
     if (!match || match[2] === 'view' || match[2].startsWith('scope-')) continue;
+    // 理货问题件和隐藏的出货兼容能力都不是普通任务列表入口。
+    if (permission === 'warehouse:tally-pending:problem-view'
+      || permission === 'warehouse:tally-pending:shipment-create') continue;
     const viewPermission = warehouseViewDependencies[match[1]];
     if (viewPermission) next.add(viewPermission);
   }
@@ -1354,6 +1580,23 @@ export const protectedDataScopePermissions: readonly PermissionKey[] = [
   'data-scope:misc-fee-market'
 ];
 
+export const hiddenPersistedApiPermissions: readonly PermissionKey[] = [
+  'master-data:customers:user-create',
+  'master-data:finance:surcharge-manage',
+  'master-data:finance:surcharge-enable',
+  'master-data:finance:fuel-rate-manage',
+  'warehouse:tally-pending:shipment-create'
+];
+
+export function hiddenPersistedApiPermissionsForRole(
+  role: RoleKey,
+  permissions: readonly PermissionKey[] = []
+): PermissionKey[] {
+  if (isAdministratorRole(role) || role === 'CUSTOMER') return [];
+  const allowed = new Set(hiddenPersistedApiPermissions);
+  return [...new Set(permissions.filter((permission) => allowed.has(permission)))];
+}
+
 export function configuredPermissionsForRole(
   role: RoleKey,
   configuredPermissions?: readonly PermissionKey[]
@@ -1370,23 +1613,14 @@ export function configuredPermissionsForRole(
   if (isAdministratorRole(role)) return [...allRuntimePermissions(), ...configuredGlobalMasks];
   if (role === 'CUSTOMER') {
     return [
-      ...withImpliedOperationalPermissions(withImpliedUiPreferencePermissions(defaultPermissionsForRole(role))),
+      ...withImpliedOperationalPermissions(withImpliedCustomerServiceViewPermissions(defaultPermissionsForRole(role))),
       ...configuredGlobalMasks
     ];
   }
   const permissions = configuredPermissions === undefined
     ? defaultPermissionsForRole(role)
     : normalizeRolePermissions(role, [...configuredPermissions]);
-  if (role === 'UG_BUSINESS_MANAGER') {
-    const crossTeamPermissions = new Set<PermissionKey>([
-      'business:dashboard:all-view',
-      'business:shipment:all-view'
-    ]);
-    for (let index = permissions.length - 1; index >= 0; index -= 1) {
-      if (crossTeamPermissions.has(permissions[index]!)) permissions.splice(index, 1);
-    }
-    permissions.push('business:dashboard:team-view', 'business:shipment:team-view');
-  }
+  const hiddenApiPermissions = hiddenPersistedApiPermissionsForRole(role, configuredPermissions ?? []);
   const defaultProtectedScopes = protectedDataScopePermissions.filter((permission) =>
     defaultPermissionsForRole(role).includes(permission)
   );
@@ -1396,33 +1630,51 @@ export function configuredPermissionsForRole(
   const effective = [
     ...new Set<PermissionKey>([
       ...permissions,
-      ...protectedScopes
+      ...protectedScopes,
+      ...hiddenApiPermissions
     ])
   ];
-  return withImpliedOperationalPermissions(withImpliedUiPreferencePermissions([...new Set(effective)]));
+  return withImpliedOperationalPermissions(withImpliedCustomerServiceViewPermissions([...new Set(effective)]));
 }
 
 export function effectivePermissionsForRole(
   role: RoleKey,
   configuredPermissions?: readonly PermissionKey[]
 ): PermissionKey[] {
-  return applyGlobalPermissionDenies(configuredPermissionsForRole(role, configuredPermissions));
+  return applyGlobalPermissionDenies(withImpliedLegacyRuntimePermissions(configuredPermissionsForRole(role, configuredPermissions)));
 }
 
 export function normalizeRolePermissions(role: RoleKey, permissions: PermissionKey[]): PermissionKey[] {
   if (isAdministratorRole(role)) {
-    return configuredPermissionsForRole(role, permissions);
+    const selectedGlobalMasks = [...new Set(permissions)].filter((permission) =>
+      globalFieldMaskKeys.some((mask) => permission === globalFieldMaskPermissionCode(mask))
+    );
+    return [
+      ...allPermissions().filter((permission) => !permission.startsWith('system:global-mask:')),
+      ...selectedGlobalMasks
+    ];
   }
   if (role === 'CUSTOMER') {
     const customerPermissions = new Set(defaultPermissionsForRole('CUSTOMER'));
-    return [...new Set(permissions)].filter((permission) =>
+    return withImpliedCustomerServiceViewPermissions([...new Set(permissions)].filter((permission) =>
       customerPermissions.has(permission) || globalFieldMaskKeys.some((mask) => permission === globalFieldMaskPermissionCode(mask))
-    );
+    ));
   }
-  const allowed = new Set(allPermissions());
+  // Hidden compatibility capabilities may remain effective after a migration,
+  // but are intentionally omitted from the role-permission UI catalog.
+  const allowed = new Set<PermissionKey>([
+    ...allPermissions(),
+    'finance:order-fee:receivable:manage'
+  ]);
   const normalized = [...new Set(permissions)]
     .filter((permission) => allowed.has(permission))
-    .filter((permission) => !isBusinessAgentOwnOnlyRole(role) || !isBusinessAgentCrossScopePermission(permission));
+    .filter((permission) => !(
+      isBusinessAgentOwnOnlyRole(role)
+      || (
+        !isBusinessAgentBroadScopeRole(role)
+        && permissions.includes('data-scope:sales-own')
+      )
+    ) || !isBusinessAgentCrossScopePermission(permission));
   if (normalized.includes(globalFieldMaskPermissionCode('agent-data'))) {
     for (const dependency of ['agent-short-name', 'agent-company-name', 'agent-channel'] as GlobalFieldMaskKey[]) {
       const code = globalFieldMaskPermissionCode(dependency);
@@ -1437,9 +1689,14 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
     }
   }
   for (const module of PRICING_MODULES) {
-    const editCode = `pricing:markup:${module.key}:edit` as PermissionKey;
     const viewCode = `pricing:markup:${module.key}:view` as PermissionKey;
-    if (normalized.includes(editCode) && !normalized.includes(viewCode)) normalized.push(viewCode);
+    const modulePrefix = `pricing:markup:${module.key}:`;
+    if (normalized.some((permission) => permission.startsWith(modulePrefix) && permission !== viewCode)
+      && !normalized.includes(viewCode)) normalized.push(viewCode);
+  }
+  if (normalized.some((permission) => permission.startsWith('pricing:price-books:') && permission !== 'pricing:price-books:view')
+    && !normalized.includes('pricing:price-books:view')) {
+    normalized.push('pricing:price-books:view');
   }
   const orderEntryCapabilities: PermissionKey[] = [
     'business:order-entry:edit',
@@ -1477,10 +1734,6 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
       if (!normalized.includes(dependency)) normalized.push(dependency);
     }
   }
-  if (normalized.includes('warehouse:in-stock:edit')
-    && !normalized.includes('warehouse:in-stock:view')) {
-    normalized.push('warehouse:in-stock:view');
-  }
   if (normalized.includes('warehouse:in-stock:order-entry')) {
     for (const dependency of [
       'business:order-entry:view',
@@ -1490,25 +1743,102 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
       if (!normalized.includes(dependency)) normalized.push(dependency);
     }
   }
-  return withImpliedOperationalPermissions(normalized);
+  const marketViewDependencies: Array<[PermissionKey, PermissionKey]> = [
+    ['market:pending-routing:route', 'market:pending-routing:view'],
+    ['market:pending-routing:edit', 'market:pending-routing:view'],
+    ['market:pending-routing:approve', 'market:pending-routing:view'],
+    ['market:pending-routing:operation-log:view', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:view', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:create', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:create', 'market:pending-routing:business-cost:view'],
+    ['market:pending-routing:business-cost:edit', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:edit', 'market:pending-routing:business-cost:view'],
+    ['market:pending-routing:business-cost:delete', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:delete', 'market:pending-routing:business-cost:view'],
+    ['market:pending-routing:payable-cost:view', 'market:pending-routing:view'],
+    ['market:pending-routing:payable-cost:create', 'market:pending-routing:view'],
+    ['market:pending-routing:payable-cost:create', 'market:pending-routing:payable-cost:view'],
+    ['market:pending-routing:payable-cost:edit', 'market:pending-routing:view'],
+    ['market:pending-routing:payable-cost:edit', 'market:pending-routing:payable-cost:view'],
+    ['market:pending-routing:payable-cost:delete', 'market:pending-routing:view'],
+    ['market:pending-routing:payable-cost:delete', 'market:pending-routing:payable-cost:view'],
+    ['market:pending-routing:return-review', 'market:pending-routing:view'],
+    ['market:routed:reroute', 'market:routed:view'],
+    ['market:routed:replace-agent', 'market:routed:view'],
+    ['market:routed:routing-log:view', 'market:routed:view'],
+    ['market:routing-report:export', 'market:routing-report:view']
+  ];
+  for (const [action, view] of marketViewDependencies) {
+    if (normalized.includes(action) && !normalized.includes(view)) normalized.push(view);
+  }
+  if (normalized.includes('customer-service:transfer:request-agent-change')
+    && !normalized.includes('customer-service:transfer:view')) {
+    normalized.push('customer-service:transfer:view');
+  }
+  const financePageViewByPrefix: Array<[string, PermissionKey]> = [
+    ['finance:dashboard:', 'finance:dashboard:view'],
+    ['finance:receivable:', 'finance:receivable:read'],
+    ['finance:business-cost:', 'finance:business-cost:read'],
+    ['finance:payable:', 'finance:payable:read'],
+    ['finance:pending-payment:', 'finance:pending-payment:read'],
+    ['finance:paid-payment:', 'finance:paid-payment:read'],
+    ['finance:water-receipt:', 'finance:water-receipt:read'],
+    ['finance:water-match:', 'finance:water-match:read'],
+    ['finance:agent-bill:', 'finance:agent-bill:read']
+  ];
+  for (const [prefix, view] of financePageViewByPrefix) {
+    if (normalized.some((permission) => permission.startsWith(prefix) && permission !== view)
+      && !normalized.includes(view)) {
+      normalized.push(view);
+    }
+  }
+  if (normalized.some((permission) => permission === 'finance:water-match:audit' || permission === 'finance:water-match:reverse')
+    && !normalized.includes('finance:receivable:read')) {
+    normalized.push('finance:receivable:read');
+  }
+  if (normalized.includes('finance:pending-payment:create')
+    && !normalized.includes('finance:pending-payment:bill-voucher-upload')) {
+    normalized.push('finance:pending-payment:bill-voucher-upload');
+  }
+  if (normalized.includes('finance:pending-payment:create')
+    && !normalized.includes('finance:pending-payment:bank-select')) {
+    normalized.push('finance:pending-payment:bank-select');
+  }
+  const orderFeeViewDependencies: Array<[PermissionKey, PermissionKey]> = [
+    ['business:order-fee:create', 'business:order-fee:view'],
+    ['business:order-fee:update', 'business:order-fee:view'],
+    ['business:order-fee:delete', 'business:order-fee:view'],
+    ['business:order-fee:lock', 'business:order-fee:view'],
+    ['business:order-fee:unlock', 'business:order-fee:view'],
+    ['business:order-fee:profit-view', 'business:order-fee:view']
+  ];
+  for (const [action, view] of orderFeeViewDependencies) {
+    if (normalized.includes(action) && !normalized.includes(view)) normalized.push(view);
+  }
+  if (normalized.includes('finance:order-fee:payable:manage')
+    && !normalized.includes('finance:order-fee:payable:view')) {
+    normalized.push('finance:order-fee:payable:view');
+  }
+  return withImpliedOperationalPermissions(withImpliedCustomerServiceViewPermissions(withImpliedTargetPageViewPermissions(normalized)));
+}
+
+export function managementPermissionsForRole(
+  role: RoleKey,
+  configuredPermissions?: readonly PermissionKey[]
+): PermissionKey[] {
+  return normalizeRolePermissions(role, [
+    ...(configuredPermissions ?? defaultPermissionsForRole(role))
+  ]);
 }
 
 const marketSensitivePermissionKeys = new Set<PermissionKey>([
   'business:shipment:agent-weight-view',
-  'market:dashboard:agent-stats-view',
-  'market:dashboard:channel-mode-stats-view',
-  'market:pending-routing:business-cost-view',
-  'market:pending-routing:payable-cost-view',
-  'market:pending-routing:agent-channel-view',
-  'market:pending-routing:cost-field-view',
-  'market:routed:agent-cost-view',
-  'market:routed:cost-total-view',
-  'market:routed:agent-channel-view',
-  'market:weekly-routing:agent-stats-view',
-  'market:weekly-routing:channel-mode-stats-view',
-  'market:weekly-routing:cost-view',
   'finance:payable:view-sensitive',
-  'finance:business-cost:view-agent'
+  'finance:business-cost:view-agent',
+  'market:pending-routing:payable-cost:view',
+  'market:pending-routing:payable-cost:create',
+  'market:pending-routing:payable-cost:edit',
+  'market:pending-routing:payable-cost:delete'
 ]);
 
 export function getNewlyAddedMarketSensitivePermissions(
@@ -1540,17 +1870,14 @@ export function defaultPermissionsForRole(role: RoleKey): PermissionKey[] {
         || !permission.startsWith('warehouse:'));
     }
     if (role === 'UG_MARKET') {
-      const marketInherited = inherited.filter((permission) =>
-        permission !== 'data-scope:sales-own'
-        && permission !== 'warehouse:in-stock:import'
-        && !permission.startsWith('finance:water-receipt:')
-        && !permission.startsWith('finance:water-match:')
-        && !permission.startsWith('misc-fee:purchase:'));
       return [...new Set<PermissionKey>([
-        ...marketInherited,
+        ...pricingLookupBusinessPermissions,
         'data-scope:misc-fee-market',
         'master-data:agents:read',
         'master-data:agent-channels:read',
+        'master-data:channels:read',
+        'master-data:channel-categories:read',
+        'master-data:exchange-rates:read',
         ...marketBasePermissions,
         ...miscFeeMarketPermissions,
         ...pricingManagementPermissions
@@ -1604,6 +1931,34 @@ export function getRoleMetadata(role: RoleKey): Omit<RolePermissionRow, 'permiss
     enabled: true,
     systemBuiltin: false
   };
+}
+
+export function isBusinessNamedUserGroup(principal: Pick<Principal, 'role' | 'assignedRole' | 'roleLabel'>): boolean {
+  const role = principal.assignedRole ?? principal.role;
+  const label = String(principal.roleLabel?.trim() || getRoleMetadata(role).label).trim();
+  return label.includes('业务');
+}
+
+export type TrackingShipmentScope = 'all' | 'customer' | 'customer-service' | 'market' | 'sales' | 'none';
+
+/** Tracking reuses existing ownership/site scopes; unknown custom groups fail closed. */
+export function trackingShipmentScopeForPrincipal(
+  principal: Pick<Principal, 'role' | 'assignedRole' | 'roleLabel' | 'dataScope' | 'effectivePermissions' | 'shipmentAllView'>
+): TrackingShipmentScope {
+  const role = principal.assignedRole ?? principal.role;
+  const label = String(principal.roleLabel?.trim() || getRoleMetadata(role).label).trim();
+  if (isAdministratorRole(role)) return 'all';
+  if (role === 'CUSTOMER') return 'customer';
+  if (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(role)) return 'all';
+  if (role === 'CUSTOMER_SERVICE' || role === 'UG_CUSTOMER_SERVICE' || label.includes('客服')) return 'customer-service';
+  if (role === 'UG_MARKET' || label.includes('市场')) return 'market';
+  if (
+    principal.dataScope === 'SALES_OWN'
+    || principal.effectivePermissions?.includes('data-scope:sales-own')
+    || isSalesScopedRole(role)
+    || isBusinessNamedUserGroup(principal)
+  ) return 'sales';
+  return 'none';
 }
 
 export function buildRolePermissionRow(role: RoleKey, permissions: PermissionKey[], metadata: Partial<Omit<RolePermissionRow, 'key' | 'permissions'>> = {}): RolePermissionRow {

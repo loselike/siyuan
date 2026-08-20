@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Inject, Req } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Inject, Param, Req } from '@nestjs/common';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
 import {
@@ -21,4 +21,17 @@ export class TrackingQueryController {
     }
     return this.repository.getCarrierTasks(request.user);
   }
+
+  @Get('tracking/external-shipments')
+  @RequirePermission('tracking:external:view')
+  externalShipments(@Req() request: { user: Principal }) {
+    return this.repository.getExternalShipments(request.user);
+  }
+
+  @Get('tracking/external-shipments/:shipmentId')
+  @RequirePermission('tracking:external:detail')
+  externalShipmentDetail(@Req() request: { user: Principal }, @Param('shipmentId') shipmentId: string) {
+    return this.repository.getExternalShipmentDetail(request.user, shipmentId);
+  }
+
 }

@@ -386,8 +386,12 @@ describe('Siyuan API orders', () => {
     expect(operatorShipments.body.length).toBeGreaterThan(0);
     expect(operatorShipments.body.every((shipment: { salesperson?: string }) => shipment.salesperson === 'operator')).toBe(true);
     expect(operatorShipments.body.every((shipment: { site?: string }) => shipment.site === '深圳思远')).toBe(true);
-    expect(marketShipments.body.length).toBeGreaterThan(operatorShipments.body.length);
-    expect(marketShipments.body).toEqual(expect.arrayContaining([expect.objectContaining({ salesperson: 'jylannie' })]));
+    // Market access is site-scoped.  An empty account/object site resolves to
+    // the default Shenzhen Siyuan site, while an owner that cannot be resolved
+    // to a user is not broadened into the market result set.
+    expect(marketShipments.body.length).toBeGreaterThan(0);
+    expect(marketShipments.body.every((shipment: { site?: string }) => shipment.site === '深圳思远')).toBe(true);
+    expect(marketShipments.body.every((shipment: { salesperson?: string }) => shipment.salesperson !== 'jylannie')).toBe(true);
   });
 
   it('prevents operators from updating shipments outside their customer scope by id', async () => {

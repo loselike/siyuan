@@ -21,6 +21,18 @@
     "./customer-source": {
       "types": "./dist/customer-source.d.ts",
       "import": "./dist/customer-source.js"
+    },
+    "./warehouse": {
+      "types": "./dist/warehouse.d.ts",
+      "import": "./dist/warehouse.js"
+    },
+    "./warehouse-input": {
+      "types": "./dist/warehouse-input.d.ts",
+      "import": "./dist/warehouse-input.js"
+    },
+    "./runtime-schema": {
+      "types": "./dist/runtime-schema.d.ts",
+      "import": "./dist/runtime-schema.js"
     }
   },
   "scripts": {

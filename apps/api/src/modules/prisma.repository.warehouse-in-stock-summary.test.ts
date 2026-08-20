@@ -6,6 +6,18 @@ import type { Principal } from './rbac.js';
 const admin: Principal = { id: 'u-admin', username: 'admin', role: 'ADMIN' };
 
 describe('PrismaRepository warehouse in-stock summary', () => {
+  it('keeps the OR permission gate fail-closed', async () => {
+    const customerFindMany = vi.fn();
+    const repository = new PrismaRepository({
+      customer: { findMany: customerFindMany },
+      auditLog: { create: vi.fn() }
+    } as unknown as PrismaService);
+    vi.spyOn(repository, 'hasPermission').mockResolvedValue(false);
+
+    await expect(repository.getWarehouseInStockSummary(admin)).rejects.toThrow('当前角色不能查看仓库看板或在仓汇总');
+    expect(customerFindMany).not.toHaveBeenCalled();
+  });
+
   it('uses the database aggregate while preserving totals and audit row count', async () => {
     const queryRaw = vi.fn().mockResolvedValue([{
       totalItems: 2n,
@@ -50,7 +62,7 @@ describe('PrismaRepository warehouse in-stock summary', () => {
     const business: Principal = {
       id: 'u-business',
       username: 'operator',
-      role: 'OPERATOR',
+      role: 'FINANCE',
       departmentTeamScope: ['operator', 'teammate']
     };
     const customerFindMany = vi.fn().mockResolvedValue([{ code: 'C001' }, { code: 'C002' }]);
@@ -91,8 +103,8 @@ describe('PrismaRepository warehouse in-stock summary', () => {
     });
   });
 
-  it('keeps an empty business customer scope empty inside the aggregate statement', async () => {
-    const business: Principal = { id: 'u-empty', username: 'nobody', role: 'OPERATOR' };
+  it('keeps an empty customer scope empty inside the aggregate statement', async () => {
+    const business: Principal = { id: 'u-empty', username: 'nobody', role: 'FINANCE' };
     const queryRaw = vi.fn().mockResolvedValue([{
       totalItems: 0n,
       receiptTickets: 0n,

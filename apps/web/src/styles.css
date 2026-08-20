@@ -5183,6 +5183,10 @@ body.is-resizing-table-column {
   width: 140px;
 }
 
+.fulfillment-board-node-filter {
+  min-width: 136px;
+}
+
 .fulfillment-board-card-columns .fulfillment-table .ant-table-thead > tr > th {
   padding: 9px 7px;
   font-size: 12px;
@@ -5577,13 +5581,17 @@ body.is-resizing-table-column {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px;
   align-items: center;
-  gap: 8px;
-  min-height: 72px;
-  padding: 10px 12px;
+  gap: 6px;
+  min-height: 48px;
+  padding: 7px 10px;
   border: 1px solid var(--sy-border-soft);
-  border-radius: 7px;
+  border-radius: 6px;
   background: #f8fafc;
-  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.role-permission-module-card.is-direct {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .role-permission-module-card.is-active,
@@ -5591,8 +5599,7 @@ body.is-resizing-table-column {
 .role-permission-module-card[data-current='true'] {
   border-color: var(--sy-primary);
   background: var(--sy-primary);
-  box-shadow: 0 5px 14px rgb(31 91 214 / 28%);
-  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgb(31 91 214 / 22%);
 }
 
 .role-permission-module-card.is-open {
@@ -5606,7 +5613,7 @@ body.is-resizing-table-column {
 .role-permission-module-card[data-current='true'].is-open {
   border-color: var(--sy-primary);
   background: var(--sy-primary);
-  box-shadow: 0 5px 14px rgb(31 91 214 / 28%);
+  box-shadow: 0 3px 10px rgb(31 91 214 / 22%);
 }
 
 .role-permission-module-card.is-active .role-permission-module-select,
@@ -5618,28 +5625,11 @@ body.is-resizing-table-column {
   color: #fff;
 }
 
-.role-permission-module-card .role-permission-module-select .ant-typography-secondary {
-  color: #111827 !important;
-}
-
-.role-permission-module-card.is-active .role-permission-module-select .ant-typography-secondary,
-.role-permission-module-card.is-current .role-permission-module-select .ant-typography-secondary,
-.role-permission-module-card[data-current='true'] .role-permission-module-select .ant-typography-secondary {
-  color: #fff !important;
-}
-
-.role-permission-module-card.is-active .ant-tag,
-.role-permission-module-card.is-current .ant-tag,
-.role-permission-module-card[data-current='true'] .ant-tag {
-  color: #fff;
-  border-color: rgb(255 255 255 / 52%);
-  background: rgb(255 255 255 / 14%);
-}
-
 .role-permission-module-select {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  align-items: center;
   min-width: 0;
+  min-height: 32px;
   padding: 0;
   border: 0;
   color: var(--sy-text);
@@ -5648,29 +5638,11 @@ body.is-resizing-table-column {
   cursor: pointer;
 }
 
-.role-permission-module-select > span {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
 .role-permission-module-title {
   display: flex;
   align-items: center;
-  gap: 6px;
   min-width: 0;
-}
-
-.role-permission-module-current {
-  flex: 0 0 auto;
-  padding: 1px 6px;
-  border: 1px solid rgb(255 255 255 / 48%);
-  border-radius: 999px;
-  color: #fff;
-  background: rgb(255 255 255 / 16%);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 18px;
+  line-height: 1.4;
 }
 
 .role-permission-module-select .ant-typography {

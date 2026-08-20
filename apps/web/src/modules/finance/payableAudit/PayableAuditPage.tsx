@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { App as AntdApp, AutoComplete, Button, Card, Col, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
+import { Alert, App as AntdApp, AutoComplete, Button, Card, Col, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import { RefreshCw } from 'lucide-react';
 import type {
@@ -14,20 +14,22 @@ import type {
   PendingPaymentListQuery
 } from '@siyuan/shared';
 import { EARLY_PAYMENT_SETTLEMENT_METHOD, FINANCIAL_DECIMAL_SCALE, calculateMonetaryTotal, formatFinancialDecimal, formatMonetaryTotal } from '@siyuan/shared';
-import type { ApiClient, PermissionKey } from '../../../apiClient';
+import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { createFinanceFeeNameOptions, financeCatalogCurrencyOptions } from '../catalog';
 import { downloadCsv } from '../exportCsv';
 import { formatBeijingDateTime } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
-import { ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
+import { ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, renderAuthorizedAction, type ManagedTableColumns } from '../../shared/ui';
 import { ChargeWeightChangeTag } from '../ChargeWeightChangeTag';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
+import { getGlobalFieldMaskVisibility } from '../../shared/globalFieldMask';
 
 const { Text } = Typography;
 
 type PayableAuditPageProps = {
   apiClient: ApiClient;
   permissions: PermissionKey[];
+  role?: RoleKey | string;
   rows: PayableAuditSummary[];
   financeCatalogItems: FinanceCatalogItemSummary[];
   renderShipmentOrderNoLink: (systemOrderNo?: string) => ReactNode;
@@ -104,7 +106,7 @@ function statusTag(value?: string) {
   return <Tag color={status === 'CONFIRMED' ? 'success' : status === 'VOIDED' ? 'default' : 'warning'}>{status === 'CONFIRMED' ? '已审核' : status === 'VOIDED' ? '已删除' : '待审核'}</Tag>;
 }
 
-export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogItems, renderShipmentOrderNoLink, onRowsChange }: PayableAuditPageProps) {
+export function PayableAuditPage({ apiClient, permissions, role, rows, financeCatalogItems, renderShipmentOrderNoLink, onRowsChange }: PayableAuditPageProps) {
   const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PayableAuditListQuery>();
   const [form] = Form.useForm<PayableAuditCreateInput & PayableAuditUpdateInput>();
@@ -124,15 +126,21 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
   const [selectedShipmentLocked, setSelectedShipmentLocked] = useState(false);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
 
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
   const canManage = hasPermission(permissions, 'finance:payable:manage');
   const canAudit = hasPermission(permissions, 'finance:payable:audit');
   const canReverse = hasPermission(permissions, 'finance:payable:reverse');
   const canVoid = hasPermission(permissions, 'finance:payable:void');
-  const canBatchAudit = hasPermission(permissions, 'finance:payable:batch-audit');
-  const canBatchReverse = hasPermission(permissions, 'finance:payable:batch-reverse');
-  const canBatchVoid = hasPermission(permissions, 'finance:payable:batch-void');
+  const canBatchAudit = canAudit;
+  const canBatchReverse = canReverse;
+  const canBatchVoid = canVoid;
+  const canMatchShipment = hasPermission(permissions, 'finance:payable:match-shipment');
   const canExport = hasPermission(permissions, 'finance:payable:export');
-  const canViewSensitive = hasPermission(permissions, 'finance:payable:view-sensitive') || response.rows.some((row) => row.canViewSensitivePayable);
+  const canUseBatchSelection = canBatchAudit || canBatchReverse || canBatchVoid || canExport || canManage;
+  const canUseRowActions = canManage || canAudit || canReverse || canVoid;
+  const canViewSensitive = fieldVisibility.showPayableCost && (hasPermission(permissions, 'finance:payable:view-sensitive') || response.rows.some((row) => row.canViewSensitivePayable));
+  const canViewPayableCost = fieldVisibility.showPayableCost;
+  const canViewPayableStatus = fieldVisibility.showPayableStatus;
   const canViewProfit = hasPermission(permissions, 'finance:payable:view-profit') || response.rows.some((row) => row.canViewProfit);
   const feeNameOptions = useMemo(() => createFinanceFeeNameOptions(financeCatalogItems), [financeCatalogItems]);
   const selectedRows = useMemo(
@@ -177,6 +185,10 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
   });
 
   const openEditor = (row?: PayableAuditSummary, prefillRow?: PayableAuditSummary) => {
+    if (!canViewPayableCost) {
+      message.warning('当前账号无权查看应付成本字段');
+      return;
+    }
     setEditingRow(row ?? null);
     const prefilledShipment = !row && prefillRow?.shipmentId ? toShipmentMatchSummary(prefillRow) : null;
     setMatchedShipment(prefilledShipment);
@@ -364,40 +376,54 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
           {row.reconciliationStatus === 'CONFIRMED' ? (
             <Tag color="success">已生成待付款</Tag>
           ) : (
-            <Popconfirm title="确认审核该跨越挂账并生成待付款？" onConfirm={() => void auditOne(row)} okText="审核" cancelText="取消">
-              <Button size="small" type="primary" disabled={!canAudit}>审核</Button>
-            </Popconfirm>
+            renderAuthorizedAction(canAudit,
+              <Popconfirm title="确认审核该跨越挂账并生成待付款？" onConfirm={() => void auditOne(row)} okText="审核" cancelText="取消">
+                <Button size="small" type="primary">审核</Button>
+              </Popconfirm>
+            )
           )}
         </Space>
       ) : (
         <Space size={4}>
-          <Button size="small" disabled={!canManage || row.reconciliationStatus === 'CONFIRMED' || row.voided} onClick={() => openEditor(row)}>修改</Button>
+          {renderAuthorizedAction(canManage,
+            <Button size="small" disabled={row.reconciliationStatus === 'CONFIRMED' || row.voided} onClick={() => openEditor(row)}>修改</Button>
+          )}
           {row.reconciliationStatus === 'CONFIRMED' ? (
-            <Popconfirm title="确认反审核该应付费用？" onConfirm={() => reverseAuditOne(row)} okText="反审核" cancelText="取消">
-              <Button size="small" disabled={!canReverse}>反审核</Button>
-            </Popconfirm>
+            renderAuthorizedAction(canReverse,
+              <Popconfirm title="确认反审核该应付费用？" onConfirm={() => reverseAuditOne(row)} okText="反审核" cancelText="取消">
+                <Button size="small">反审核</Button>
+              </Popconfirm>
+            )
           ) : (
-            <Popconfirm title={row.settlementMethod?.trim() === EARLY_PAYMENT_SETTLEMENT_METHOD
-              ? '确认审核该市场应付并进入待付款？挂账仅允许提前付款，应付审核仍需数据确认和转单号。'
-              : '确认审核该市场应付并进入待付款？请确认业务数据、代理数据均已审核且已填写转单号。'} onConfirm={() => void auditOne(row)} okText="审核" cancelText="取消">
-              <Button size="small" type="primary" disabled={!canAudit || row.voided}>审核</Button>
+            renderAuthorizedAction(canAudit,
+              <Popconfirm title={row.settlementMethod?.trim() === EARLY_PAYMENT_SETTLEMENT_METHOD
+                ? '确认审核该市场应付并进入待付款？挂账仅允许提前付款，应付审核仍需数据确认和转单号。'
+                : '确认审核该市场应付并进入待付款？请确认业务数据、代理数据均已审核且已填写转单号。'} onConfirm={() => void auditOne(row)} okText="审核" cancelText="取消">
+                <Button size="small" type="primary" disabled={row.voided}>审核</Button>
+              </Popconfirm>
+            )
+          )}
+          {renderAuthorizedAction(canVoid,
+            <Popconfirm title="确认删除该应付费用？删除后不可恢复；已被付款申请、付款记录或凭证引用时不能删除。" onConfirm={async () => { await apiClient.deletePayableAudit(row.id); await loadRows(); }} okText="删除" cancelText="取消">
+              <Button size="small" danger disabled={row.reconciliationStatus === 'CONFIRMED' || row.voided}>删除</Button>
             </Popconfirm>
           )}
-          <Popconfirm title="确认删除该应付费用？删除后不可恢复；已被付款申请、付款记录或凭证引用时不能删除。" onConfirm={async () => { await apiClient.deletePayableAudit(row.id); await loadRows(); }} okText="删除" cancelText="取消">
-            <Button size="small" danger disabled={!canVoid || row.reconciliationStatus === 'CONFIRMED' || row.voided}>删除</Button>
-          </Popconfirm>
         </Space>
       )
     }
   };
 
   const unavailableColumns = new Set<ColumnKey>([
-    ...(!canViewSensitive ? ['agentName' as const, 'amount' as const, 'orderRmbTotal' as const] : []),
-    ...(!canViewProfit ? ['receivableProfit' as const, 'operationProfit' as const] : [])
+    ...(!canViewSensitive || !canViewPayableCost ? ['chargeWeightKg' as const, 'unitPrice' as const, 'amount' as const, 'orderRmbTotal' as const] : []),
+    ...(!fieldVisibility.showAgentCompanyName ? ['agentName' as const] : []),
+    ...(!fieldVisibility.showAgentChannel ? ['agentChannel' as const] : []),
+    ...(!canViewPayableStatus ? ['reconciliationStatus' as const] : []),
+    ...(!canViewProfit ? ['receivableProfit' as const, 'operationProfit' as const] : []),
+    ...(!canUseRowActions ? ['action' as const] : [])
   ]);
-  const columns = defaultColumnOrder
+  const availableColumnOrder = defaultColumnOrder
     .filter((key) => !unavailableColumns.has(key))
-    .map((key) => baseColumns[key]);
+  const columns = availableColumnOrder.map((key) => baseColumns[key]);
 
   const matrixColumns: ManagedTableColumns<PayableAuditSummary> = [
     {
@@ -415,16 +441,16 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
             { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
             { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
             { key: 'name', label: '费用名称', value: row.name || '-' },
-            row.canViewSensitivePayable ? { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true } : null,
-            { key: 'agentChannel', label: agentFieldLabels.channel, value: row.agentChannel || '-', title: row.agentChannel },
+            row.canViewSensitivePayable && fieldVisibility.showAgentCompanyName ? { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true } : null,
+            fieldVisibility.showAgentChannel ? { key: 'agentChannel', label: agentFieldLabels.channel, value: row.agentChannel || '-', title: row.agentChannel } : null,
             { key: 'currency', label: '币种', value: <Tag>{row.currency ?? 'RMB'}</Tag> },
-            { key: 'chargeWeightKg', label: '计费重', value: <ChargeWeightChangeTag value={row.chargeWeightKg} change={row.chargeWeightChange} /> },
-            { key: 'unitPrice', label: '单价', value: typeof row.unitPrice === 'number' ? formatUnitPrice(row.unitPrice) : '-' },
-            { key: 'amount', label: '总金额', value: row.canViewSensitivePayable ? formatMoney(row.amount) : <Text type="secondary">按权限隐藏</Text> },
-            { key: 'orderRmbTotal', label: '合计', value: row.canViewSensitivePayable ? formatMoney(row.orderRmbTotal ?? 0) : <Text type="secondary">按权限隐藏</Text> },
+            canViewPayableCost ? { key: 'chargeWeightKg', label: '计费重', value: <ChargeWeightChangeTag value={row.chargeWeightKg} change={row.chargeWeightChange} /> } : null,
+            canViewPayableCost ? { key: 'unitPrice', label: '单价', value: typeof row.unitPrice === 'number' ? formatUnitPrice(row.unitPrice) : '-' } : null,
+            canViewPayableCost ? { key: 'amount', label: '总金额', value: row.canViewSensitivePayable ? formatMoney(row.amount) : <Text type="secondary">按权限隐藏</Text> } : null,
+            canViewPayableCost ? { key: 'orderRmbTotal', label: '合计', value: row.canViewSensitivePayable ? formatMoney(row.orderRmbTotal ?? 0) : <Text type="secondary">按权限隐藏</Text> } : null,
             row.canViewProfit ? { key: 'receivableProfit', label: '应收利润', value: typeof row.receivableProfit === 'number' ? formatMoney(row.receivableProfit) : '-' } : null,
             row.canViewProfit ? { key: 'operationProfit', label: '运营利润', value: typeof row.operationProfit === 'number' ? formatMoney(row.operationProfit) : '-' } : null,
-            { key: 'status', label: '状态', value: statusTag(row.reconciliationStatus) },
+            canViewPayableStatus ? { key: 'status', label: '状态', value: statusTag(row.reconciliationStatus) } : null,
             { key: 'createdAt', label: '制单日期', value: <ManagedMatrixDateTime value={row.createdAt ? formatBeijingDateTime(row.createdAt) : undefined} /> },
             { key: 'createdBy', label: '制单人', value: row.createdBy || '系统' },
             { key: 'reviewedAt', label: '审单日期', value: <ManagedMatrixDateTime value={row.reviewedAt ? formatBeijingDateTime(row.reviewedAt) : undefined} /> },
@@ -434,8 +460,12 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
         />
       )
     },
-    { ...baseColumns.action, key: 'action', width: 150, fixed: 'right' }
+    ...(canUseRowActions ? [{ ...baseColumns.action, key: 'action', width: 150, fixed: 'right' as const }] : [])
   ];
+
+  if (!fieldVisibility.showPayableCost) {
+    return <Alert type="warning" showIcon message="当前账号无权查看该页面" />;
+  }
 
   return (
     <Card
@@ -443,39 +473,36 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
       className="finance-work-card"
       extra={
         <Space wrap>
-          <Popconfirm title={`确认批量审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消"><Button disabled={!selectedIds.length || !canBatchAudit}>批量审核</Button></Popconfirm>
-          <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消"><Button disabled={!selectedIds.length || !canBatchReverse || hasSelectedMiscFeeHang}>批量反审核</Button></Popconfirm>
-          <Popconfirm title={`确认批量删除已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('void')} okText="批量删除" cancelText="取消"><Button disabled={!selectedIds.length || !canBatchVoid || hasSelectedMiscFeeHang} danger>批量删除</Button></Popconfirm>
-          <Button disabled={!canExport} onClick={async () => {
+          {renderAuthorizedAction(canBatchAudit, <Popconfirm title={`确认批量审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消"><Button disabled={!selectedIds.length}>批量审核</Button></Popconfirm>)}
+          {renderAuthorizedAction(canBatchReverse, <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消"><Button disabled={!selectedIds.length || hasSelectedMiscFeeHang}>批量反审核</Button></Popconfirm>)}
+          {renderAuthorizedAction(canBatchVoid, <Popconfirm title={`确认批量删除已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('void')} okText="批量删除" cancelText="取消"><Button disabled={!selectedIds.length || hasSelectedMiscFeeHang} danger>批量删除</Button></Popconfirm>)}
+          {renderAuthorizedAction(canExport, <Button onClick={async () => {
             const exported = await apiClient.exportPayableAudits({ ids: selectedIds.length ? selectedIds : undefined, query });
             downloadCsv('payable-audits.csv', [
-              { key: 'agentName', label: agentFieldLabels.detailedCompanyName },
+              ...(fieldVisibility.showAgentCompanyName ? [{ key: 'agentName', label: agentFieldLabels.detailedCompanyName }] : []),
               { key: 'name', label: '费用名称' },
               { key: 'customerCode', label: '客户编号' },
               { key: 'outboundOrderNo', label: '出货单号' },
               { key: 'transferNo', label: '转单号' },
-              { key: 'agentChannel', label: '代理渠道' },
-              { key: 'reconciliationStatus', label: '对账状态' },
+              ...(fieldVisibility.showAgentChannel ? [{ key: 'agentChannel', label: '代理渠道' }] : []),
+              ...(canViewPayableStatus ? [{ key: 'reconciliationStatus', label: '对账状态' }] : []),
               { key: 'currency', label: '币种' },
-              { key: 'chargeWeightKg', label: '计费重' },
-              { key: 'unitPrice', label: '单价' },
-              { key: 'amount', label: '总金额' },
-              { key: 'orderRmbTotal', label: '合计' },
+              ...(canViewPayableCost ? [{ key: 'chargeWeightKg', label: '计费重' }, { key: 'unitPrice', label: '单价' }, { key: 'amount', label: '总金额' }, { key: 'orderRmbTotal', label: '合计' }] : []),
               { key: 'receivableProfit', label: '应收利润' },
               { key: 'operationProfit', label: '运营利润' },
               { key: 'salesperson', label: '业务员' },
               { key: 'remark', label: '备注' }
             ], exported.rows as unknown as Array<Record<string, unknown>>);
             message.success(`应付导出已生成：${exported.rows.length} 条`);
-          }}>导出</Button>
-          <Button
+          }}>导出</Button>)}
+          {renderAuthorizedAction(canManage, <Button
             type="primary"
             onClick={() => openEditor(undefined, selectedCreateRow)}
-            disabled={!canManage || selectedIds.length > 1}
+            disabled={selectedIds.length > 1}
             title={selectedIds.length > 1 ? '添加应付只能引用一笔已选单据' : undefined}
           >
             添加应付
-          </Button>
+          </Button>)}
           <Button icon={<RefreshCw size={15} />} onClick={() => void loadRows()} />
         </Space>
       }
@@ -484,8 +511,8 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
         <Row gutter={[10, 10]} className="finance-filter-bar finance-audit-filter-grid">
           <Col xs={24} md={8} xl={4}><Form.Item name="systemOrderNo" label="出货单号"><Input placeholder="出货单号 / 订单号" /></Form.Item></Col>
           <Col xs={24} md={8} xl={4}><Form.Item name="customer" label="客户"><Input placeholder="客户编号 / 名称" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={4}><Form.Item name="agent" label={`${agentFieldLabels.detailedCompanyName}筛选`}><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={4}><Form.Item name="status" label="对账状态"><Select options={[{ value: 'ALL', label: '全部' }, { value: 'PENDING', label: '待审核' }, { value: 'CONFIRMED', label: '已审核' }, { value: 'VOIDED', label: '已删除' }]} /></Form.Item></Col>
+          {fieldVisibility.showAgentCompanyName ? <Col xs={24} md={8} xl={4}><Form.Item name="agent" label={`${agentFieldLabels.detailedCompanyName}筛选`}><Input /></Form.Item></Col> : null}
+          {canViewPayableStatus ? <Col xs={24} md={8} xl={4}><Form.Item name="status" label="对账状态"><Select options={[{ value: 'ALL', label: '全部' }, { value: 'PENDING', label: '待审核' }, { value: 'CONFIRMED', label: '已审核' }, { value: 'VOIDED', label: '已删除' }]} /></Form.Item></Col> : null}
           <Col xs={24} md={16} xl={8} className="finance-audit-filter-actions">
             <Space wrap>
               <Button type="primary" onClick={() => { const next = { ...defaultQuery, ...queryForm.getFieldsValue(), page: 1 }; setQuery(next); void loadRows(next); }}>查询</Button>
@@ -510,7 +537,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
         ) : null}
       </Form>
       <Flex gap={12} wrap className="finance-work-status-strip finance-audit-summary">
-        {canViewSensitive ? <Tag color="blue">RMB 合计 {formatMoney(response.totals.rmbTotal)}</Tag> : <Tag>金额按权限隐藏</Tag>}
+        {canViewPayableCost ? (canViewSensitive ? <Tag color="blue">RMB 合计 {formatMoney(response.totals.rmbTotal)}</Tag> : <Tag>金额按权限隐藏</Tag>) : null}
         {canViewProfit ? <Tag color="green">应收利润 {formatMoney(response.totals.receivableProfitTotal ?? 0)}</Tag> : null}
         {canViewProfit ? <Tag color="cyan">运营利润 {formatMoney(response.totals.operationProfitTotal ?? 0)}</Tag> : null}
         <Tag>待审核 {response.totals.pendingCount}</Tag>
@@ -534,7 +561,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
               columnSettings: {
                 storageKey: 'siyuan.finance.payableAudit.matrix-columns.v2',
                 title: '市场应付审核矩阵列设置',
-                lockedKeys: ['action']
+                lockedKeys: canUseRowActions ? ['action'] : []
               }
             }
           },
@@ -548,7 +575,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
               columnSettings: {
                 storageKey: columnStorageKey,
                 title: '市场应付审核列设置',
-                defaultColumnOrder
+                defaultColumnOrder: availableColumnOrder
               }
             }
           }
@@ -557,7 +584,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
         size="small"
         loading={loading}
         dataSource={response.rows}
-        rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: Boolean(row.voided || (row.auditSource === 'MISC_FEE_HANG' && row.reconciliationStatus === 'CONFIRMED')) }) }}
+        rowSelection={canUseBatchSelection ? { selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: Boolean(row.voided || (row.auditSource === 'MISC_FEE_HANG' && row.reconciliationStatus === 'CONFIRMED')) }) } : undefined}
         columnSettingsPlacement="toolbar"
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
         onChange={(pagination: TablePaginationConfig, _filters, sorter) => {
@@ -582,24 +609,26 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
               <Form.Item name="customerOrderNo" label="出货单号"><Input readOnly={selectedShipmentLocked} placeholder="可选，按出货单号匹配" /></Form.Item>
               <Form.Item name="transferNo" label="转单号"><Input readOnly={selectedShipmentLocked} placeholder="可选，按转单号匹配" /></Form.Item>
               <Form.Item name="customerCode" label="客户编号"><Input readOnly={selectedShipmentLocked} placeholder="可选，按客户编号匹配" /></Form.Item>
-              <Button loading={matchingShipment} onClick={() => void matchShipment()}>匹配订单</Button>
+              {canMatchShipment ? <Button loading={matchingShipment} onClick={() => void matchShipment()}>匹配订单</Button> : null}
               {matchedShipment ? (
                 <Card size="small" className="finance-audit-summary">
                   <Space direction="vertical" size={2}>
                     <Text strong>{matchedShipment.customerName}</Text>
                     <Text type="secondary">出货单号：{resolveShipmentOutboundOrderNo(matchedShipment)} / 转单号：{matchedShipment.transferNo ?? '-'}</Text>
-                    <Text type="secondary">业务员：{matchedShipment.salesperson ?? '-'} / {agentFieldLabels.detailedCompanyName}：{matchedShipment.agentName ?? '-'} / {agentFieldLabels.channel}：{matchedShipment.agentChannel ?? '-'}</Text>
+                    <Text type="secondary">业务员：{matchedShipment.salesperson ?? '-'}{fieldVisibility.showAgentCompanyName ? ` / ${agentFieldLabels.detailedCompanyName}：${matchedShipment.agentName ?? '-'}` : ''}{fieldVisibility.showAgentChannel ? ` / ${agentFieldLabels.channel}：${matchedShipment.agentChannel ?? '-'}` : ''}</Text>
                   </Space>
                 </Card>
               ) : null}
             </>
           ) : (
-            <Card size="small" className="finance-audit-summary"><Text strong>{editingRow.systemOrderNo}</Text><br /><Text type="secondary">{editingRow.customerCode} / {editingRow.agentName ?? '-'} / {editingRow.transferNo ?? '-'}</Text></Card>
+            <Card size="small" className="finance-audit-summary"><Text strong>{editingRow.systemOrderNo}</Text><br /><Text type="secondary">{editingRow.customerCode} {fieldVisibility.showAgentCompanyName ? ` / ${editingRow.agentName ?? '-'}` : ''} / {editingRow.transferNo ?? '-'}</Text></Card>
           )}
           <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请选择或填写费用名称' }]}><AutoComplete options={feeNameOptions} /></Form.Item>
-          <Form.Item name="chargeWeightKg" label="计费重" rules={[{ required: true, message: '请填写计费重' }]}><InputNumber className="full-width" min={0} precision={3} /></Form.Item>
-          <Form.Item name="unitPrice" label="单价" rules={[{ required: true, message: '请填写单价' }]}><InputNumber className="full-width" min={0} precision={FINANCIAL_DECIMAL_SCALE} /></Form.Item>
-          <Form.Item name="amount" label="总金额"><InputNumber className="full-width" min={0} precision={2} disabled /></Form.Item>
+          {canViewPayableCost ? <>
+            <Form.Item name="chargeWeightKg" label="计费重" rules={[{ required: true, message: '请填写计费重' }]}><InputNumber className="full-width" min={0} precision={3} /></Form.Item>
+            <Form.Item name="unitPrice" label="单价" rules={[{ required: true, message: '请填写单价' }]}><InputNumber className="full-width" min={0} precision={FINANCIAL_DECIMAL_SCALE} /></Form.Item>
+            <Form.Item name="amount" label="总金额"><InputNumber className="full-width" min={0} precision={2} disabled /></Form.Item>
+          </> : null}
           <Form.Item name="currency" label="币种"><Select options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} /></Form.Item>
           <Form.Item name="paymentNo" label="付款编号"><Input /></Form.Item>
           <Form.Item name="remark" label="备注"><Input.TextArea rows={3} /></Form.Item>

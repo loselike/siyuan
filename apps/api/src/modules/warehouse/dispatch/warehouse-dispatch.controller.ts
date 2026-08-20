@@ -4,6 +4,7 @@ import type { Principal } from '../../rbac.js';
 import { WarehouseDispatchService } from './warehouse-dispatch.service.js';
 
 type WarehouseDispatchDeclarationInput = Parameters<WarehouseDispatchService['updateDeclaration']>[2];
+type WarehouseDispatchInboundNoInput = Parameters<WarehouseDispatchService['updateInboundNo']>[2];
 type WarehouseHandoverPrintInput = Parameters<WarehouseDispatchService['printHandover']>[1];
 type ShipmentDispatchInput = Parameters<WarehouseDispatchService['dispatch']>[2];
 
@@ -28,6 +29,16 @@ export class WarehouseDispatchController {
     @Body() body: WarehouseDispatchDeclarationInput
   ) {
     return this.warehouseDispatch.updateDeclaration(request.user, id, body);
+  }
+
+  @Patch('warehouse/dispatch-shipments/:id/inbound-no')
+  @RequirePermission('warehouse:dispatch-pending:edit')
+  updateWarehouseDispatchInboundNo(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: WarehouseDispatchInboundNoInput
+  ) {
+    return this.warehouseDispatch.updateInboundNo(request.user, id, body);
   }
 
   @Get('warehouse/handover/:shipmentId')

@@ -12,7 +12,7 @@ export class TrackingManualEventCommandController {
   ) {}
 
   @Post('shipments/:id/tracking-events')
-  @RequirePermission('tracking:external:single-add')
+  @RequirePermission('tracking:external:import')
   async addTrackingEvent(
     @Req() request: { user: Principal },
     @Param('id') id: string,

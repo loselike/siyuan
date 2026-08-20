@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../../prisma.service.js';
 import type { Principal } from '../../rbac.js';
-import { PrismaWarehouseInventoryQueryRepository } from './warehouse-inventory-query.repository.js';
+import {
+  PrismaWarehouseInventoryQueryRepository,
+  type WarehouseInventoryLegacyOperations
+} from './warehouse-inventory-query.repository.js';
 
 const admin: Principal = { id: 'u-admin', username: 'admin', role: 'ADMIN' };
 const operator: Principal = { id: 'u-operator', username: 'operator', role: 'OPERATOR' };
@@ -34,14 +37,166 @@ function packageRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createRepository(prisma: Record<string, unknown>) {
+function createRepository(
+  prisma: Record<string, unknown>,
+  legacyRepository?: Partial<WarehouseInventoryLegacyOperations>,
+  permittedRoles: Principal['role'][] = ['ADMIN']
+) {
   return new PrismaWarehouseInventoryQueryRepository(
     prisma as unknown as PrismaService,
-    { hasPermission: vi.fn().mockImplementation(async (role: Principal['role']) => role === 'ADMIN') }
+    { hasPermission: vi.fn().mockImplementation(async (role: Principal['role']) => permittedRoles.includes(role)) },
+    legacyRepository as WarehouseInventoryLegacyOperations | undefined
   );
 }
 
 describe('PrismaWarehouseInventoryQueryRepository', () => {
+  it('keeps the remaining today-receipt read behind the legacy bridge during migration', async () => {
+    const legacyRepository = {
+      getWarehouseTodayReceipts: vi.fn().mockResolvedValue({ rows: ['today'] })
+    };
+    const repository = createRepository({}, legacyRepository);
+
+    await expect(repository.getWarehouseTodayReceipts(admin, { customerOrderNo: '9476' })).resolves.toEqual({ rows: ['today'] });
+    expect(legacyRepository.getWarehouseTodayReceipts).toHaveBeenCalledWith(admin, { customerOrderNo: '9476' });
+  });
+
+  it('runs the extracted in-stock list strategy from the Prisma adapter', async () => {
+    const packageFindMany = vi.fn().mockResolvedValue([packageRow({ site: '深圳仓' })]);
+    const customerFindMany = vi.fn().mockResolvedValue([{ code: 'C001', salesperson: 'operator' }]);
+    const auditCreate = vi.fn().mockResolvedValue({});
+    const shipmentCount = vi.fn().mockResolvedValue(2);
+    const repository = createRepository({
+      warehousePackage: { findMany: packageFindMany },
+      warehouseTallyTask: { findMany: vi.fn().mockResolvedValue([]) },
+      customer: { findMany: customerFindMany },
+      shipment: { count: shipmentCount },
+      auditLog: { create: auditCreate }
+    });
+
+    await expect(repository.getWarehouseInStock(admin, { keyword: 'SF001' })).resolves.toEqual({
+      totals: {
+        receiptTickets: 1,
+        totalPackages: 1,
+        totalWeightKg: 10,
+        totalCbm: 0.06,
+        waitingDispatchTickets: 2,
+        pendingTallyTickets: 1,
+        exceptionTickets: 0
+      },
+      rows: [expect.objectContaining({ id: 'pkg-1', site: '深圳仓', customerMaintained: true, salesperson: 'operator' })]
+    });
+    expect(packageFindMany).toHaveBeenCalledWith({
+      where: {
+        status: 'RECEIVED',
+        OR: [
+          { customerCode: { contains: 'SF001', mode: 'insensitive' } },
+          { customerName: { contains: 'SF001', mode: 'insensitive' } },
+          { customerOrderNo: { contains: 'SF001', mode: 'insensitive' } },
+          { domesticTrackingNo: { contains: 'SF001', mode: 'insensitive' } },
+          { combinedOrderNo: { contains: 'SF001', mode: 'insensitive' } },
+          { systemOrderNo: { contains: 'SF001', mode: 'insensitive' } },
+          { receivingChannel: { contains: 'SF001', mode: 'insensitive' } },
+          { destinationCountry: { contains: 'SF001', mode: 'insensitive' } },
+          { site: { contains: 'SF001', mode: 'insensitive' } }
+        ]
+      },
+      orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }]
+    });
+    expect(shipmentCount).toHaveBeenCalledWith({
+      where: { status: 'WAITING_DISPATCH' }
+    });
+    expect(auditCreate).toHaveBeenCalledWith({
+      data: {
+        actorId: 'u-admin',
+        action: 'warehouse.in_stock.view',
+        target: 'warehouse:in-stock',
+        after: { query: { keyword: 'SF001' }, rowCount: 1 }
+      }
+    });
+  });
+
+  it('keeps the in-stock permission denial before any data query', async () => {
+    const packageFindMany = vi.fn();
+    const repository = createRepository({ warehousePackage: { findMany: packageFindMany } });
+
+    await expect(repository.getWarehouseInStock(operator, {})).rejects.toThrow('当前角色不能查看在仓数据');
+    expect(packageFindMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps salesperson ownership filtering and site redaction in the extracted list strategy', async () => {
+    const finance: Principal = {
+      id: 'u-finance', username: 'finance', role: 'FINANCE', departmentTeamScope: ['sales-a']
+    };
+    const packageFindMany = vi.fn().mockResolvedValue([
+      packageRow({ id: 'owned', customerCode: 'OWNED', site: '深圳仓' }),
+      packageRow({ id: 'transferred', customerCode: 'TRANSFERRED', site: '广州仓' })
+    ]);
+    const customerFindMany = vi.fn()
+      .mockResolvedValueOnce([{ code: 'OWNED' }, { code: 'TRANSFERRED' }])
+      .mockResolvedValueOnce([
+        { code: 'OWNED', salesperson: 'sales-a' },
+        { code: 'TRANSFERRED', salesperson: 'sales-b' }
+      ]);
+    const repository = createRepository({
+      warehousePackage: { findMany: packageFindMany },
+      warehouseTallyTask: { findMany: vi.fn().mockResolvedValue([]) },
+      customer: { findMany: customerFindMany },
+      shipment: { count: vi.fn().mockResolvedValue(1) },
+      auditLog: { create: vi.fn().mockResolvedValue({}) }
+    }, undefined, ['FINANCE']);
+
+    const response = await repository.getWarehouseInStock(finance, {});
+    expect(response).toEqual(expect.objectContaining({
+      rows: [expect.objectContaining({ id: 'owned', customerCode: 'OWNED' })],
+      totals: expect.objectContaining({ receiptTickets: 1 })
+    }));
+    expect(packageFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ customerCode: { in: ['OWNED', 'TRANSFERRED'] } })
+    }));
+    expect(response.rows[0]).not.toHaveProperty('site');
+    expect(response.rows).toHaveLength(1);
+  });
+
+  it('runs the extracted summary strategy from the Prisma adapter', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([{
+      totalItems: 2n,
+      receiptTickets: 1n,
+      totalPackages: 3n,
+      totalWeightKg: 25,
+      totalCbm: 0.08,
+      pendingTallyTickets: 1n,
+      exceptionTickets: 1n
+    }]);
+    const auditCreate = vi.fn().mockResolvedValue({});
+    const legacySummary = vi.fn().mockResolvedValue({ totals: { receiptTickets: 999 } });
+    const repository = createRepository({
+      $queryRaw: queryRaw,
+      shipment: { count: vi.fn().mockResolvedValue(3) },
+      auditLog: { create: auditCreate },
+      customer: { findMany: vi.fn() }
+    }, { getWarehouseInStockSummary: legacySummary });
+
+    await expect(repository.getWarehouseInStockSummary(admin)).resolves.toEqual({
+      totals: {
+        receiptTickets: 1,
+        totalPackages: 3,
+        totalWeightKg: 25,
+        totalCbm: 0.08,
+        waitingDispatchTickets: 3,
+        pendingTallyTickets: 1,
+        exceptionTickets: 1
+      }
+    });
+    expect(legacySummary).not.toHaveBeenCalled();
+    expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        action: 'warehouse.in_stock.view',
+        target: 'warehouse:in-stock',
+        after: { query: {}, rowCount: 2 }
+      })
+    }));
+  });
+
   it('keeps package ordering, confirmed tally state and response mapping unchanged', async () => {
     const packageFindMany = vi.fn().mockResolvedValue([
       packageRow(),

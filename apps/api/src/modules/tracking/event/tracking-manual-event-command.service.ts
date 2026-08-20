@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { toExternalTrackingShipmentSummary } from '@siyuan/shared';
 import type { Principal } from '../../rbac.js';
 import {
   TRACKING_MANUAL_EVENT_COMMAND_REPOSITORY,
@@ -14,10 +15,12 @@ export class TrackingManualEventCommandService {
   ) {}
 
   async addShipmentEvent(principal: Principal, shipmentId: string, input: TrackingManualEventInput) {
-    return this.repository.addTrackingEvent(principal, shipmentId, input);
+    return toExternalTrackingShipmentSummary(
+      await this.repository.addTrackingEvent(principal, shipmentId, input, 'external-import')
+    );
   }
 
   async addOperationShipmentEvent(principal: Principal, shipmentId: string, input: TrackingManualEventInput) {
-    return this.repository.addTrackingEvent(principal, shipmentId, input);
+    return this.repository.addTrackingEvent(principal, shipmentId, input, 'operations-line-shipment');
   }
 }

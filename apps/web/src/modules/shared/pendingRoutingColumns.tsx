@@ -1,29 +1,10 @@
-import { Button, Space, Tag, Typography } from 'antd';
+import { Button, Popconfirm, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { ReactNode } from 'react';
 import type { BusinessCostAuditSummary, PayableAuditSummary, Shipment } from '@siyuan/shared';
-import { agentFieldLabels } from './agentFieldLabels';
 import { formatBeijingDateTime } from './format';
 import { resolveShipmentOutboundOrderNo } from './shipmentOrderNo';
-import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from './shipmentStageDwell';
 
 const { Text } = Typography;
-
-export type PendingRoutingApprovalReadiness = {
-  ready: boolean;
-  missingFields: string[];
-};
-
-export function getPendingRoutingApprovalReadiness(shipment: Pick<Shipment, 'destinationCountry' | 'channelId' | 'agentId' | 'routeAgentChannelName'>): PendingRoutingApprovalReadiness {
-  const missingFields = [
-    shipment.destinationCountry?.trim() ? null : '国家',
-    shipment.channelId?.trim() ? null : '公司渠道',
-    shipment.agentId?.trim() ? null : '代理',
-    shipment.routeAgentChannelName?.trim() ? null : '代理渠道'
-  ].filter((field): field is string => Boolean(field));
-
-  return { ready: missingFields.length === 0, missingFields };
-}
 
 function formatAmount(amount?: number, currency = 'RMB') {
   return typeof amount === 'number' ? `${amount.toFixed(2)} ${currency}` : '-';
@@ -41,26 +22,6 @@ function getPayableCosts(shipment: Shipment, rows: PayableAuditSummary[] = []) {
   return rows.filter((fee) => fee.shipmentId === shipment.id || fee.systemOrderNo === shipment.systemOrderNo);
 }
 
-function comparePendingRoutingText(left?: string, right?: string) {
-  const normalizedLeft = (left ?? '').trim();
-  const normalizedRight = (right ?? '').trim();
-  if (normalizedLeft === normalizedRight) return 0;
-  if (!normalizedLeft) return 1;
-  if (!normalizedRight) return -1;
-  return normalizedLeft.localeCompare(normalizedRight, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
-}
-
-function getBusinessCostTotal(shipment: Shipment, rows: BusinessCostAuditSummary[]) {
-  return getBusinessCosts(shipment, rows).reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0);
-}
-
-function getPayableCostTotal(shipment: Shipment, rows: PayableAuditSummary[]) {
-  const costs = getPayableCosts(shipment, rows);
-  return costs.length
-    ? costs.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0)
-    : Number(shipment.routeCostTotal ?? 0);
-}
-
 function renderFeeRows(rows: Array<BusinessCostAuditSummary | PayableAuditSummary>) {
   return rows.length ? (
     <Space direction="vertical" size={0}>
@@ -73,35 +34,6 @@ function renderFeeRows(rows: Array<BusinessCostAuditSummary | PayableAuditSummar
   ) : <Text type="secondary">-</Text>;
 }
 
-function renderFeeNames(rows: Array<BusinessCostAuditSummary | PayableAuditSummary>) {
-  return rows.length ? (
-    <Space direction="vertical" size={0}>
-      {rows.map((row) => <Text key={row.id}>{row.name}</Text>)}
-    </Space>
-  ) : <Text type="secondary">-</Text>;
-}
-
-function formatFeeNames(rows: Array<BusinessCostAuditSummary | PayableAuditSummary>) {
-  return rows.length ? rows.map((row) => row.name).join('、') : '-';
-}
-
-function renderMatrixField(label: string, value: ReactNode, title?: string) {
-  return (
-    <div className="pending-routing-matrix-field" key={label}>
-      <span className="pending-routing-matrix-label">{label}</span>
-      <span className="pending-routing-matrix-value" title={title}>{value}</span>
-    </div>
-  );
-}
-
-function renderMatrixCell(fields: Array<{ label: string; value: ReactNode; title?: string }>) {
-  return (
-    <div className="pending-routing-matrix-cell">
-      {fields.map((field) => renderMatrixField(field.label, field.value, field.title))}
-    </div>
-  );
-}
-
 export function createPendingRoutingColumns(options: {
   businessCostAudits?: BusinessCostAuditSummary[];
   payableAudits?: PayableAuditSummary[];
@@ -110,28 +42,31 @@ export function createPendingRoutingColumns(options: {
   onApprove?: (shipment: Shipment) => void;
   onModify?: (shipment: Shipment) => void;
   onViewFees?: (shipment: Shipment) => void;
+  onViewPayableFees?: (shipment: Shipment) => void;
   onViewLog?: (shipment: Shipment) => void;
+  onReturnReview?: (shipment: Shipment) => void;
   canViewBusinessCost?: boolean;
   canViewPayableCost?: boolean;
   canViewAgentChannel?: boolean;
+  canViewRouteCost?: boolean;
+  /** Retained for callers that switch between the standard and matrix table layouts. */
   presentation?: 'columns' | 'matrix';
 }): ColumnsType<Shipment> {
-  const { businessCostAudits = [], payableAudits = [], mode, onRoute, onApprove, onModify, onViewFees, onViewLog, canViewBusinessCost: businessCostPermission, canViewPayableCost: payableCostPermission, canViewAgentChannel: agentChannelPermission, presentation = 'columns' } = options;
+  const { businessCostAudits = [], payableAudits = [], mode, onRoute, onApprove, onModify, onViewFees, onViewPayableFees, onViewLog, onReturnReview, canViewBusinessCost: businessCostPermission, canViewPayableCost: payableCostPermission, canViewAgentChannel: agentChannelPermission, canViewRouteCost: routeCostPermission } = options;
   // 客服保留只读列位置但不返回敏感金额；仓库不展示成本列。
-  const canViewPayableCost = payableCostPermission ?? mode === 'market';
+  const canViewPayableCost = mode === 'market' ? false : payableCostPermission ?? true;
   const canViewBusinessCost = businessCostPermission ?? mode !== 'warehouse';
   const canViewAgentChannel = agentChannelPermission ?? mode === 'market';
+  const canViewRouteCost = routeCostPermission ?? mode === 'market';
+  const routeCostColumns: ColumnsType<Shipment> = mode === 'market' && canViewRouteCost ? [
+    { title: '计费重', width: 92, render: (_, record) => record.routeChargeWeightKg === undefined ? '-' : `${record.routeChargeWeightKg.toFixed(3)} KG` },
+    { title: '单价', width: 92, render: (_, record) => formatAmount(record.routeUnitPrice, record.routeCurrency) },
+    { title: '其他费用', width: 104, render: (_, record) => formatAmount(record.routeOtherFee, record.routeCurrency) },
+    { title: '总成本', width: 108, render: (_, record) => formatAmount(record.routeCostTotal, record.routeCurrency) }
+  ] : [];
   const businessCostColumns: ColumnsType<Shipment> = canViewBusinessCost ? [
+    { title: '业务成本', width: 180, render: (_, record) => renderFeeRows(getBusinessCosts(record, businessCostAudits)) },
     {
-      key: 'businessCosts',
-      title: '业务成本',
-      width: mode === 'market' ? 150 : 180,
-      render: (_, record) => mode === 'market'
-        ? renderFeeNames(getBusinessCosts(record, businessCostAudits))
-        : renderFeeRows(getBusinessCosts(record, businessCostAudits))
-    },
-    {
-      key: 'businessCostTotal',
       title: '业务成本合计',
       width: 130,
       align: 'right',
@@ -142,57 +77,64 @@ export function createPendingRoutingColumns(options: {
       }
     }
   ] : [];
-  const payableCostColumns: ColumnsType<Shipment> = mode !== 'warehouse' ? [
+  const payableCostColumns: ColumnsType<Shipment> = mode === 'customerService' && canViewPayableCost ? [
     {
-      key: 'payableCosts',
       title: '应付成本',
       width: 150,
       render: (_, record) => {
-        if (!canViewPayableCost) return <Text type="secondary">-</Text>;
         const costs = getPayableCosts(record, payableAudits);
-        if (costs.length) return mode === 'market' ? renderFeeNames(costs) : renderFeeRows(costs);
-        if (!record.routeCostTotal) return <Text type="secondary">-</Text>;
-        return mode === 'market'
-          ? <Text>代理成本</Text>
-          : <Text>代理成本 {formatAmount(record.routeCostTotal, record.routeCurrency)}</Text>;
+        return costs.length ? renderFeeRows(costs) : record.routeCostTotal ? <Text>代理成本 {formatAmount(record.routeCostTotal, record.routeCurrency)}</Text> : <Text type="secondary">-</Text>;
       }
     },
     {
-      key: 'payableCostTotal',
       title: '应付合计',
       width: 120,
       align: 'right',
       render: (_, record) => {
-        if (!canViewPayableCost) return <Text type="secondary">-</Text>;
         const costs = getPayableCosts(record, payableAudits);
         if (costs.length) return formatAmount(costs.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
         return formatAmount(record.routeCostTotal, record.routeCurrency);
       }
     }
   ] : [];
+  const marketOrderInfoColumns: ColumnsType<Shipment> = mode === 'market' ? [
+    { title: '备注', dataIndex: 'remark', width: 180, ellipsis: true, render: (value?: string) => value?.trim() || '-' },
+    { title: '亚马逊代码', dataIndex: 'fbaWarehouseCode', width: 120, ellipsis: true, render: (value?: string) => value?.trim() || '-' },
+    { title: '邮编', dataIndex: 'receiverPostalCode', width: 110, ellipsis: true, render: (value?: string) => value?.trim() || '-' }
+  ] : [];
 
-  const renderActions = (record: Shipment) => {
-    if (mode === 'market') {
-      const approvalReadiness = getPendingRoutingApprovalReadiness(record);
-      const approvalTitle = approvalReadiness.ready
-        ? '审核排货'
-        : `请先保存排货资料并补齐：${approvalReadiness.missingFields.join('、')}`;
-
-      return (
-        <Space size={4} className="pending-routing-actions">
-          {onRoute ? (
-            <Button size="small" onClick={() => onRoute(record)}>
-              排货
-            </Button>
-          ) : null}
+  return [
+    { title: '日期', width: 170, render: (_, record) => formatBeijingDateTime(getPendingRoutingDate(record)) },
+    { title: '站点', dataIndex: 'site', width: 100, render: (value?: string) => value || '-' },
+    { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value || '-' },
+    { title: '客户编号', dataIndex: 'customerCode', width: 110, render: (value: string | undefined, record) => value || record.customerName.split('-')[0] || '-' },
+    { title: '运单号', dataIndex: 'systemOrderNo', width: 170, render: (_value: string, record) => resolveShipmentOutboundOrderNo(record) },
+    { title: '公司渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
+    {
+      title: '国家',
+      dataIndex: 'destinationCountry',
+      width: 100,
+      render: (value?: string) => value?.trim() ? value : <Text type="danger">缺国家</Text>
+    },
+    { title: '货物数据', width: 180, render: (_, record) => `${record.packageCount} 件 / 实重 ${(record.weightKg ?? record.receivableWeightKg).toFixed(2)} kg / 计费 ${record.receivableWeightKg.toFixed(2)} kg` },
+    ...businessCostColumns,
+    ...routeCostColumns,
+    ...(mode === 'market' ? [] : [{ title: '选项', width: 84, render: () => <Text type="secondary">待市场排货</Text> }]),
+    ...(canViewAgentChannel ? [
+      { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value || '待分配' },
+      { title: '代理渠道', dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '待分配' }
+    ] : []),
+    ...payableCostColumns,
+    ...marketOrderInfoColumns,
+    {
+      title: '操作',
+      width: mode === 'market' ? 270 : onViewFees ? 150 : 90,
+      fixed: 'right',
+      render: (_, record) => mode === 'market' ? (
+        <Space size={4} wrap>
+          {onRoute ? <Button size="small" onClick={() => onRoute(record)}>排货</Button> : null}
           {onApprove ? (
-            <Button
-              size="small"
-              type="primary"
-              disabled={!approvalReadiness.ready}
-              title={approvalTitle}
-              onClick={() => onApprove(record)}
-            >
+            <Button size="small" type="primary" onClick={() => onApprove(record)}>
               审核
             </Button>
           ) : null}
@@ -206,215 +148,38 @@ export function createPendingRoutingColumns(options: {
               操作日志
             </Button>
           ) : null}
+          {onViewFees ? (
+            <Button size="small" onClick={() => onViewFees(record)}>
+              业务成本
+            </Button>
+          ) : null}
+          {onViewPayableFees ? (
+            <Button size="small" onClick={() => onViewPayableFees(record)}>
+              应付成本
+            </Button>
+          ) : null}
+          {onReturnReview ? (
+            <Popconfirm
+              title="确认退回重审？"
+              description="订单将回到待审核状态，当前待排货资料会解除。"
+              okText="退回重审"
+              cancelText="取消"
+              onConfirm={() => onReturnReview(record)}
+            >
+              <Button size="small" danger>退回重审</Button>
+            </Popconfirm>
+          ) : null}
         </Space>
-      );
-    }
-
-    return (
-      <Space size={6} wrap>
-        {onViewFees ? (
-          <Button size="small" onClick={() => onViewFees(record)}>
-            查看费用
-          </Button>
-        ) : null}
-        <Tag>只读</Tag>
-      </Space>
-    );
-  };
-
-  const columnLayout: ColumnsType<Shipment> = [
-    { key: 'pendingRoutingDate', title: '日期', width: 150, render: (_, record) => <span className="pending-routing-date">{formatBeijingDateTime(getPendingRoutingDate(record))}</span> },
-    { key: 'stageDwell', title: '停留时间', width: 105, sorter: (left, right) => getShipmentStageDwellSeconds(left) - getShipmentStageDwellSeconds(right), render: (_, record) => getShipmentStageDwellText(record) },
-    { title: '站点', dataIndex: 'site', width: 76, render: (value?: string) => value || '-' },
-    { title: '业务员', dataIndex: 'salesperson', width: 86, ellipsis: true, render: (value?: string) => value || '-' },
-    { title: '客户编号', dataIndex: 'customerCode', width: 96, ellipsis: true, render: (value: string | undefined, record) => <Text className="pending-routing-identifier">{value || record.customerName.split('-')[0] || '-'}</Text> },
-    { title: '出货单号', dataIndex: 'systemOrderNo', width: 150, ellipsis: true, render: (_: string | undefined, record) => <Text strong className="pending-routing-order-no">{resolveShipmentOutboundOrderNo(record)}</Text> },
-    { title: '公司渠道', dataIndex: 'channelName', width: 124, ellipsis: true, render: (value?: string) => value || '-' },
-    {
-      title: '国家',
-      dataIndex: 'destinationCountry',
-      width: 78,
-      render: (value?: string) => value?.trim() ? value : <Text type="danger">缺国家</Text>
-    },
-    {
-      title: '邮编',
-      dataIndex: 'receiverPostalCode',
-      width: 88,
-      render: (value?: string) => value?.trim() || '-'
-    },
-    {
-      title: '亚马逊代码',
-      dataIndex: 'fbaWarehouseCode',
-      width: 104,
-      render: (value?: string) => value?.trim() || '-'
-    },
-    {
-      key: 'cargoData',
-      title: '货物数据',
-      width: 230,
-      render: (_, record) => {
-        const productName = record.productName?.trim() || '-';
-        return <span className="pending-routing-cargo" title={productName}>品名 {productName} · {record.packageCount} 件 · 实重 {(record.weightKg ?? record.receivableWeightKg).toFixed(2)} KG · 计费 {record.receivableWeightKg.toFixed(2)} KG</span>;
-      }
-    },
-    ...businessCostColumns,
-    ...(mode === 'market' ? [] : [{
-      key: 'routingAction',
-      title: '选项',
-      width: 84,
-      render: () => <Text type="secondary">待市场排货</Text>
-    }]),
-    ...(canViewAgentChannel ? [
-      { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 150, render: (value?: string) => value || '待分配' },
-      { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '待分配' }
-    ] : []),
-    ...payableCostColumns,
-    {
-      key: 'actions',
-      title: '操作',
-      width: mode === 'market' ? 188 : onViewFees ? 150 : 90,
-      fixed: 'right',
-      render: (_, record) => renderActions(record)
+      ) : (
+        <Space size={6} wrap>
+          {onViewFees ? (
+            <Button size="small" onClick={() => onViewFees(record)}>
+              查看费用
+            </Button>
+          ) : null}
+          <Tag>只读</Tag>
+        </Space>
+      )
     }
   ];
-
-  if (presentation !== 'matrix') return columnLayout;
-
-  const matrixColumns: ColumnsType<Shipment> = [
-    {
-      key: 'matrixBasic',
-      title: '基础信息',
-      width: 188,
-      className: 'pending-routing-matrix-group-basic',
-      sorter: (left, right) => Date.parse(getPendingRoutingDate(left)) - Date.parse(getPendingRoutingDate(right)),
-      showSorterTooltip: { title: '按日期排序' },
-      render: (_, record) => {
-        const dateTime = formatBeijingDateTime(getPendingRoutingDate(record));
-        return renderMatrixCell([
-          { label: '日期', value: dateTime, title: dateTime },
-          { label: '停留时间', value: getShipmentStageDwellText(record) },
-          { label: '站点', value: record.site || '-' },
-          { label: '业务员', value: record.salesperson || '-', title: record.salesperson || '-' }
-        ]);
-      }
-    },
-    {
-      key: 'matrixOrder',
-      title: '订单信息',
-      width: 174,
-      className: 'pending-routing-matrix-group-order',
-      sorter: (left, right) => comparePendingRoutingText(
-        left.customerCode || left.customerName.split('-')[0],
-        right.customerCode || right.customerName.split('-')[0]
-      ),
-      showSorterTooltip: { title: '按客户编号排序' },
-      render: (_, record) => {
-        const customerCode = record.customerCode || record.customerName.split('-')[0] || '-';
-        return renderMatrixCell([
-          { label: '客户编号', value: <Text className="pending-routing-identifier">{customerCode}</Text>, title: customerCode },
-          { label: '出货单号', value: <Text className="pending-routing-order-no">{resolveShipmentOutboundOrderNo(record)}</Text>, title: resolveShipmentOutboundOrderNo(record) }
-        ]);
-      }
-    },
-    {
-      key: 'matrixRoute',
-      title: '路线与资料',
-      width: 220,
-      className: 'pending-routing-matrix-group-route',
-      sorter: (left, right) => comparePendingRoutingText(left.destinationCountry, right.destinationCountry),
-      showSorterTooltip: { title: '按国家排序' },
-      render: (_, record) => {
-        const readiness = getPendingRoutingApprovalReadiness(record);
-        const country = record.destinationCountry?.trim() || '';
-        const postalCode = record.receiverPostalCode?.trim() || '-';
-        const amazonCode = record.fbaWarehouseCode?.trim() || '-';
-        const statusTitle = readiness.ready ? '排货资料已完整' : `待补：${readiness.missingFields.join('、')}`;
-        return renderMatrixCell([
-          { label: '国家', value: country || <Text type="danger">缺国家</Text>, title: country || '缺国家' },
-          { label: '公司渠道', value: record.channelName || '-', title: record.channelName || '-' },
-          { label: '邮编', value: postalCode, title: postalCode },
-          { label: '亚马逊代码', value: amazonCode, title: amazonCode },
-          {
-            label: '资料状态',
-            value: <Tag color={readiness.ready ? 'green' : 'gold'} className="pending-routing-matrix-status" title={statusTitle}>{readiness.ready ? '资料完整' : '待补资料'}</Tag>
-          }
-        ]);
-      }
-    },
-    {
-      key: 'matrixCargo',
-      title: '货物数据',
-      width: 190,
-      className: 'pending-routing-matrix-group-cargo',
-      sorter: (left, right) => left.receivableWeightKg - right.receivableWeightKg,
-      showSorterTooltip: { title: '按计费重排序' },
-      render: (_, record) => {
-        const productName = record.productName?.trim() || '-';
-        return renderMatrixCell([
-          { label: '品名', value: productName, title: productName },
-          { label: '件数', value: `${record.packageCount} 件` },
-          { label: '实重', value: `${(record.weightKg ?? record.receivableWeightKg).toFixed(2)} KG` },
-          { label: '计费重', value: `${record.receivableWeightKg.toFixed(2)} KG` }
-        ]);
-      }
-    },
-    ...(canViewBusinessCost ? [{
-      key: 'matrixBusinessCost',
-      title: '业务成本',
-      width: 174,
-      className: 'pending-routing-matrix-group-business-cost',
-      sorter: (left: Shipment, right: Shipment) => getBusinessCostTotal(left, businessCostAudits) - getBusinessCostTotal(right, businessCostAudits),
-      showSorterTooltip: { title: '按业务成本合计排序' },
-      render: (_: unknown, record: Shipment) => {
-        const costs = getBusinessCosts(record, businessCostAudits);
-        const names = formatFeeNames(costs);
-        const total = costs.length ? formatAmount(costs.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0)) : '-';
-        return renderMatrixCell([
-          { label: '费用名称', value: names, title: names },
-          { label: '业务成本合计', value: total, title: total }
-        ]);
-      }
-    }] : []),
-    ...(canViewAgentChannel || canViewPayableCost ? [{
-      key: 'matrixAgentPayable',
-      title: '代理与应付',
-      width: 304,
-      className: 'pending-routing-matrix-group-agent',
-      sorter: (left: Shipment, right: Shipment) => canViewAgentChannel
-        ? comparePendingRoutingText(left.agentName, right.agentName)
-        : getPayableCostTotal(left, payableAudits) - getPayableCostTotal(right, payableAudits),
-      showSorterTooltip: { title: canViewAgentChannel ? '按代理详细公司名排序' : '按应付合计排序' },
-      render: (_: unknown, record: Shipment) => {
-        const fields: Array<{ label: string; value: ReactNode; title?: string }> = [];
-        if (canViewAgentChannel) {
-          fields.push(
-            { label: agentFieldLabels.detailedCompanyName, value: record.agentName || '待分配', title: record.agentName || '待分配' },
-            { label: agentFieldLabels.channel, value: record.routeAgentChannelName || '待分配', title: record.routeAgentChannelName || '待分配' }
-          );
-        }
-        if (canViewPayableCost) {
-          const costs = getPayableCosts(record, payableAudits);
-          const names = costs.length ? formatFeeNames(costs) : record.routeCostTotal ? '代理成本' : '-';
-          const total = costs.length
-            ? formatAmount(costs.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0))
-            : formatAmount(record.routeCostTotal, record.routeCurrency);
-          fields.push(
-            { label: '应付成本', value: names, title: names },
-            { label: '应付合计', value: total, title: total }
-          );
-        }
-        return renderMatrixCell(fields);
-      }
-    }] : []),
-    {
-      key: 'actions',
-      title: '操作',
-      width: 132,
-      fixed: 'right',
-      className: 'pending-routing-matrix-actions',
-      render: (_, record) => renderActions(record)
-    }
-  ];
-
-  return matrixColumns;
 }

@@ -22,11 +22,12 @@ import {
 } from './entryModel';
 import { countryOptions as builtInCountryOptions, filterLocationOption, getStateOptions } from './countryStateOptions';
 import { WarehouseTallyHistoryChain } from '../../warehouse/WarehouseTallyHistoryChain';
-import { ManagedTable } from '../../shared/ui';
+import { ManagedTable, renderAuthorizedAction } from '../../shared/ui';
 import { WarehousePackageNoWithTallyStatus } from '../../shared/WarehousePackageNoWithTallyStatus';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { getDetailedCompanyAgentOptions, resolveAgentIdByIdentity } from '../../shared/agentIdentity';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
+import { getGlobalFieldMaskVisibility } from '../../shared/globalFieldMask';
 
 const { Text } = Typography;
 
@@ -64,7 +65,8 @@ export function resolveOrderEntryBusinessCostAccess(role: RoleKey, permissions: 
 
 export function resolveOrderEntryFinanceVisibility(role: RoleKey, permissions: readonly PermissionKey[]) {
   const legacyBusinessCostAccess = resolveOrderEntryBusinessCostAccess(role, permissions);
-  const canManagePayables = role === 'ADMIN' || permissions.includes('business:order-entry:payable-fee');
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
+  const canManagePayables = fieldVisibility.showPayableCost && (role === 'ADMIN' || permissions.includes('business:order-entry:payable-fee'));
   const canViewFinanceAuditFields = role === 'ADMIN' || [
     'finance:order-fee:payable:view',
     'finance:payable:view-sensitive',
@@ -78,7 +80,7 @@ export function resolveOrderEntryFinanceVisibility(role: RoleKey, permissions: r
     canViewOrderEntryPayables: canManagePayables,
     canEditOrderEntryPayables: canManagePayables,
     canViewBusinessCostAuditFields: legacyBusinessCostAccess.canView && canViewFinanceAuditFields,
-    canViewPayableAuditFields: canManagePayables && canViewFinanceAuditFields
+    canViewPayableAuditFields: canManagePayables && fieldVisibility.showPayableStatus && canViewFinanceAuditFields
   };
 }
 
@@ -183,6 +185,12 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
   const canEditOrderEntry = role === 'ADMIN'
     || permissions.includes('business:order-entry:edit')
     || Boolean(draftId && permissions.includes('business:order-entry:draft-edit'));
+  const canSaveProductName = role === 'ADMIN' || permissions.some((permission) => [
+    'master-data:finance:write',
+    'business:order-entry:edit',
+    'business:order-entry:create',
+    'business:order-entry:draft-edit'
+  ].includes(permission));
   const canMaintainOrderEntryFinance = canWriteOrderEntryBusinessCosts || canEditOrderEntryPayables;
   const canEditEntryAt = role === 'ADMIN' || permissions.includes('finance:payable:manage');
   const settlementRows = useMemo(() => getSettlementMethodRows(financeCatalogItems), [financeCatalogItems]);
@@ -332,6 +340,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
   const maybeSaveCatalogItem = useCallback((category: FinanceCatalogCategory, rawName?: string) => {
     const name = rawName?.trim();
     if (!name) return;
+    if (category === 'PRODUCT_NAME' && !canSaveProductName) return;
     const exists = category === 'FEE_NAME' ? feeNameSet.has(name) : category === 'CARGO_TYPE' ? cargoTypeSet.has(name) : productNameSet.has(name);
     if (exists) return;
     const label = category === 'FEE_NAME' ? '费用名称' : category === 'CARGO_TYPE' ? '货物类型' : '品名';
@@ -345,12 +354,16 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       cancelText: isProductName ? '仅用于本单' : '暂不保存',
       onOk: async () => {
         try {
-          await apiClient.createFinanceCatalogItem({
-            category,
-            name,
-            enabled: true,
-            currency: category === 'FEE_NAME' ? 'RMB' : undefined
-          });
+          if (category === 'PRODUCT_NAME') {
+            await apiClient.createFinanceProductName({ name, enabled: true });
+          } else {
+            await apiClient.createFinanceCatalogItem({
+              category,
+              name,
+              enabled: true,
+              currency: category === 'FEE_NAME' ? 'RMB' : undefined
+            });
+          }
           messageApi.success('已保存到资料库');
           await onCatalogChange?.();
         } catch (error) {
@@ -358,7 +371,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
         }
       }
     });
-  }, [apiClient, cargoTypeSet, feeNameSet, messageApi, onCatalogChange, productNameSet]);
+  }, [apiClient, canSaveProductName, cargoTypeSet, feeNameSet, messageApi, onCatalogChange, productNameSet]);
 
   const packagePickerSelectedIds = useMemo<Key[]>(() => packagePickerSelected.map((pkg) => pkg.id), [packagePickerSelected]);
 
@@ -1240,6 +1253,20 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       : amounts.reduce<number>((sum, amount) => sum + Number(amount), 0);
   };
   const formatFeeRmbAmount = (amount?: number) => amount === undefined ? '缺少有效汇率' : `RMB ${amount.toFixed(2)}`;
+  const formatFeeCurrencyAmount = (row: FinanceEntryFeeDraft, type: ShipmentFinanceItemType) =>
+    `${getFeeCurrency(row, type)} ${calculateFinanceEntryFeeAmount(row).toFixed(2)}`;
+  const formatFeeCurrencyTotals = (rows: FinanceEntryFeeDraft[], type: ShipmentFinanceItemType) => {
+    const totals = new Map<string, number>();
+    rows.forEach((row) => {
+      const currency = getFeeCurrency(row, type);
+      totals.set(currency, (totals.get(currency) ?? 0) + calculateFinanceEntryFeeAmount(row));
+    });
+    if (!totals.size) return 'RMB 0.00';
+    return [...totals.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([currency, amount]) => `${currency} ${amount.toFixed(2)}`)
+      .join(' / ');
+  };
   const receivableCurrencyRows = ['USD', 'RMB'].map((currency) => ({
     currency,
     balance: receiptRows
@@ -1299,7 +1326,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
             />
           )
         },
-        { key: 'totalRmb', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeRmbAmount(getFeeRmbAmount(row, type))}</Text> },
+        { key: 'totalCurrency', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeCurrencyAmount(row, type)}</Text> },
         { key: 'createdAt', title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
         { key: 'createdBy', title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
         { key: 'auditedAt', title: '审单日期', width: 120, render: () => renderReadonlyCell(null) },
@@ -1337,7 +1364,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
                     <Text strong>合计</Text>
                   </AntdTable.Summary.Cell>
                   <AntdTable.Summary.Cell index={columns.length - 1} align="right">
-                    <Text strong>{formatFeeRmbAmount(getFeeRmbTotal(rows, type))}</Text>
+                    <Text strong>{formatFeeCurrencyTotals(rows, type)}</Text>
                   </AntdTable.Summary.Cell>
                 </AntdTable.Summary.Row>
               </AntdTable.Summary>
@@ -1423,7 +1450,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
         },
         { key: 'unitPrice', title: '单价', width: 120, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
         { key: 'totalAmount', title: '总金额', width: 120, align: 'right', render: (_, row) => <InputNumber readOnly precision={2} value={calculateFinanceEntryFeeAmount(row)} /> },
-        { key: 'totalRmb', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeRmbAmount(getFeeRmbAmount(row, type))}</Text> },
+        { key: 'totalCurrency', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeCurrencyAmount(row, type)}</Text> },
         ...profitColumns,
         { key: 'createdAt', title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
         { key: 'createdBy', title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
@@ -1448,7 +1475,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
                     <Text strong>合计</Text>
                   </AntdTable.Summary.Cell>
                   <AntdTable.Summary.Cell index={columns.length - 1} align="right">
-                    <Text strong>{formatFeeRmbAmount(getFeeRmbTotal(rows, type))}</Text>
+                    <Text strong>{formatFeeCurrencyTotals(rows, type)}</Text>
                   </AntdTable.Summary.Cell>
                 </AntdTable.Summary.Row>
               </AntdTable.Summary>
@@ -1473,7 +1500,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       { key: 'chargeWeightKg', title: '计费重', width: 110, render: (_, row) => <InputNumber min={0} precision={2} value={row.chargeWeightKg} onChange={(value) => updateFee(type, row.id, { chargeWeightKg: value ?? undefined })} /> },
       { key: 'outboundUnitPrice', title: '出货成本单价', width: 125, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
       { key: 'totalAmount', title: '总金额', width: 120, align: 'right', render: (_, row) => <InputNumber readOnly precision={2} value={calculateFinanceEntryFeeAmount(row)} /> },
-      { key: 'totalRmb', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeRmbAmount(getFeeRmbAmount(row, type))}</Text> },
+      { key: 'totalCurrency', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeCurrencyAmount(row, type)}</Text> },
       {
         key: 'paymentNo',
         title: '付款编号',
@@ -1505,7 +1532,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
                   <Text strong>合计</Text>
                 </AntdTable.Summary.Cell>
                 <AntdTable.Summary.Cell index={columns.length - 1} align="right">
-                  <Text strong>{formatFeeRmbAmount(getFeeRmbTotal(rows, type))}</Text>
+                  <Text strong>{formatFeeCurrencyTotals(rows, type)}</Text>
                 </AntdTable.Summary.Cell>
               </AntdTable.Summary.Row>
             </AntdTable.Summary>
@@ -1609,7 +1636,14 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
                   <Col xs={24} md={12} xl={8}><Form.Item name="customerOrderNo" label="出货单号" rules={[{ required: true, message: '请输入出货单号' }]}><Input /></Form.Item></Col>
                   <Col xs={24} md={12} xl={8}>
                     <Form.Item name="receivingChannel" label="公司渠道" rules={[{ required: true, message: '请选择公司渠道' }]}>
-                      <Select showSearch allowClear options={businessChannelOptions} onChange={(value) => recalculateCargoChargeWeight(value)} />
+                      <Select
+                        showSearch
+                        allowClear
+                        optionFilterProp="label"
+                        filterOption={filterLocationOption}
+                        options={businessChannelOptions}
+                        onChange={(value) => recalculateCargoChargeWeight(value)}
+                      />
                     </Form.Item>
                   </Col>
                   <Col xs={24} md={12} xl={8}>
@@ -1781,7 +1815,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
                     ) : null}
                     <Col xs={24} md={12} xxl={canUseAgentFields ? 6 : 8}><Form.Item name="subOrderNo" label="分单号"><Input /></Form.Item></Col>
                     <Col xs={24} md={12} xxl={12}><Form.Item name="settlementMethod" label="结算方式" rules={[{ required: true, message: '请选择结算方式' }]}><Select showSearch options={settlementOptions} onChange={(value) => form.setFieldsValue({ currency: getSettlementMethodCurrency(settlementRows, value) ?? form.getFieldValue('currency') ?? 'RMB' })} /></Form.Item></Col>
-                    <Col xs={24} md={12} xxl={12}><Form.Item label="应收总额"><Input aria-label="应收总额" readOnly value={formatFeeRmbAmount(getFeeRmbTotal(receivables, 'RECEIVABLE'))} /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={12}><Form.Item label="应收总额"><Input aria-label="应收总额" readOnly value={formatFeeCurrencyTotals(receivables, 'RECEIVABLE')} /></Form.Item></Col>
                     <Col xs={24}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
                   </Row>
                 </section>
@@ -1822,8 +1856,14 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       </div>
       <div className="finance-entry-actions">
         {canEditOrderEntry ? <Button onClick={reset} disabled={submitting || draftLoading}>清空</Button> : null}
-        <Button onClick={() => submit(false)} loading={submitting} disabled={draftLoading || (!canEditOrderEntry && (!draftId || !canMaintainOrderEntryFinance)) || (canEditOrderEntry && (!canSaveDraft || (!draftId && !canCreateOrderEntry)))}>{canEditOrderEntry ? '保存草稿' : '保存费用'}</Button>
-        {canEditOrderEntry ? <Button type="primary" onClick={() => submit(true)} loading={submitting} disabled={draftLoading || !canSaveDraft || !canSubmitForReview || (!draftId && !canCreateOrderEntry)}>提交审核</Button> : null}
+        {renderAuthorizedAction(
+          (canEditOrderEntry && canSaveDraft && Boolean(draftId || canCreateOrderEntry))
+            || (!canEditOrderEntry && Boolean(draftId) && canMaintainOrderEntryFinance),
+          <Button onClick={() => submit(false)} loading={submitting} disabled={draftLoading}>{canEditOrderEntry ? '保存草稿' : '保存费用'}</Button>
+        )}
+        {renderAuthorizedAction(canEditOrderEntry && canSaveDraft && canSubmitForReview && Boolean(draftId || canCreateOrderEntry),
+          <Button type="primary" onClick={() => submit(true)} loading={submitting} disabled={draftLoading}>提交审核</Button>
+        )}
       </div>
       <Modal
         title={`已选包裹详情（${selectedPackages.length} 条）`}

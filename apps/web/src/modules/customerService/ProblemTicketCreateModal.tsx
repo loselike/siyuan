@@ -33,6 +33,7 @@ const fallbackProblemTags: CommonTagSummary[] = [
 export function ProblemTicketCreateModal({
   shipment,
   apiClient,
+  title = '创建问题件',
   role,
   permissions = [],
   defaultCustomerVisible = true,
@@ -43,6 +44,7 @@ export function ProblemTicketCreateModal({
 }: {
   shipment: Shipment | null;
   apiClient: ApiClient;
+  title?: string;
   role: string;
   permissions?: readonly string[];
   defaultCustomerVisible?: boolean;
@@ -206,7 +208,7 @@ export function ProblemTicketCreateModal({
   }
 
   return (
-    <Modal title="创建问题件" open={Boolean(shipment)} onCancel={close} onOk={() => void submit()} confirmLoading={submitting} okText="确定" cancelText="取消" destroyOnHidden>
+    <Modal title={title} open={Boolean(shipment)} onCancel={close} onOk={() => void submit()} confirmLoading={submitting} okText="确定" cancelText="取消" destroyOnHidden>
       <Form form={form} layout="vertical">
         <Space direction="vertical" size={2} className="full-width">
           <Text strong>{shipment?.systemOrderNo}</Text>

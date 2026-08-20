@@ -10,7 +10,9 @@ import type { PermissionKey, RoleKey } from '../../apiClient';
 import { formatCurrency, formatUsd } from '../shared/format';
 import { demoOperationalNow, menuItems } from './config';
 
-export function getRoleDisplayName(role: RoleKey) {
+export function getRoleDisplayName(role: RoleKey, roleLabel?: string) {
+  const normalizedRoleLabel = roleLabel?.trim();
+  if (normalizedRoleLabel) return normalizedRoleLabel;
   const labels: Record<RoleKey, string> = {
     ADMIN: '管理员组',
     CUSTOMER_SERVICE: '客服',
@@ -19,7 +21,7 @@ export function getRoleDisplayName(role: RoleKey) {
     FINANCE: '财务',
     CUSTOMER: '客户'
   };
-  return labels[role];
+  return labels[role] ?? role;
 }
 
 export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[], role: RoleKey): StaffMenuKey[] {
@@ -48,6 +50,7 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
       'warehouse:today-receipt:view',
       'warehouse:in-stock:view',
       'warehouse:tally-pending:view',
+      'warehouse:tally-pending:problem-view',
       'warehouse:tally-completed:view',
       'warehouse:dispatch-pending:view',
       'warehouse:outbounded:view',
@@ -57,7 +60,7 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
       'market:dashboard:view',
       'market:pending-routing:view',
       'market:routed:view',
-      'market:weekly-routing:view'
+      'market:routing-report:view'
     )],
     ['customerService', canAny('customer-service:dashboard:view', 'customer-service:data-confirm:view', 'customer-service:transfer:view', 'customer-service:pending-routing:view', 'customer-service:waiting-departure:view', 'customer-service:departed:view', 'customer-service:arrived-port:view', 'customer-service:delivering:view', 'customer-service:signed:view', 'customer-service:problem:view')],
     ['logisticsTracking', canAny('tracking:carrier-task:view', 'tracking:external:view')],

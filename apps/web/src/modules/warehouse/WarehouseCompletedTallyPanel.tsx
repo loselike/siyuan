@@ -1,8 +1,12 @@
 import { Button, Card, Checkbox, Input, Segmented, Space, Tag, Typography } from 'antd';
+import { useEffect } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type {
+  WarehouseTallyRepeatAgentSummary,
   WarehouseTallyRepeatBatchSummary,
+  WarehouseTallyRepeatCustomerSummary,
   WarehouseTallyRepeatOperatorSummary,
+  WarehouseTallyRepeatSalespersonSummary,
   WarehouseTallyRepeatStatisticsQuery,
   WarehouseTallyRepeatStatisticsResponse,
   WarehouseTallyTaskSummary
@@ -17,7 +21,8 @@ import { WarehouseCompletedTallyHistorySummary } from './WarehouseCompletedTally
 const { Text } = Typography;
 
 export type CompletedTallyView = 'tasks' | 'history' | 'repeat-statistics';
-export type TallyRepeatStatisticsView = 'operators' | 'batches';
+export type TallyRepeatStatisticsView = 'agents' | 'customers' | 'salespeople' | 'operators' | 'batches';
+type TallyRepeatDimensionRow = WarehouseTallyRepeatAgentSummary | WarehouseTallyRepeatCustomerSummary | WarehouseTallyRepeatSalespersonSummary;
 
 export function WarehouseCompletedTallyPanel({
   view,
@@ -43,7 +48,8 @@ export function WarehouseCompletedTallyPanel({
   onResetRepeatStatistics,
   onRepeatStatisticsViewChange,
   onShowOperatorRepeatBatches,
-  onOpenRepeatBatchHistory
+  onOpenRepeatBatchHistory,
+  showAgentData
 }: {
   view: CompletedTallyView;
   onViewChange: (view: CompletedTallyView) => void;
@@ -69,8 +75,14 @@ export function WarehouseCompletedTallyPanel({
   onRepeatStatisticsViewChange: (view: TallyRepeatStatisticsView) => void;
   onShowOperatorRepeatBatches: (record: WarehouseTallyRepeatOperatorSummary) => void;
   onOpenRepeatBatchHistory: (record: WarehouseTallyRepeatBatchSummary) => void;
+  showAgentData?: boolean;
 }) {
+  const canShowAgentData = showAgentData !== false;
   const completedTallyArchiveSummaries = buildCompletedTallyArchiveSummaries(completedArchiveRows, completedTasks);
+
+  useEffect(() => {
+    if (!canShowAgentData && repeatStatisticsView === 'agents') onRepeatStatisticsViewChange('customers');
+  }, [canShowAgentData, onRepeatStatisticsViewChange, repeatStatisticsView]);
 
   return (
     <Card
@@ -288,11 +300,11 @@ export function WarehouseCompletedTallyPanel({
               </select>
             </label>
             <label className="warehouse-tally-repeat-filter warehouse-tally-repeat-filter-keyword">
-              <span>批次/客户</span>
+              <span>批次/归属</span>
               <Input
-                aria-label="重复理货批次或客户"
+                aria-label="重复理货批次或归属"
                 value={repeatFilterDraft.keyword ?? ''}
-                placeholder="任务号、组合号、客户编号"
+              placeholder={canShowAgentData ? '任务号、组合号、客户、代理、业务员' : '任务号、组合号、客户、业务员'}
                 onChange={(event) => setRepeatFilterDraft((current) => ({
                   ...current,
                   keyword: event.target.value
@@ -318,6 +330,7 @@ export function WarehouseCompletedTallyPanel({
 
           <div className="warehouse-tally-repeat-summary" aria-label="重复理货统计概览">
             {[
+              ['统计期理货', repeatStatistics.summary.tallyCount, '次'],
               ['完成批次', repeatStatistics.summary.completedBatchCount, '批'],
               ['重复批次', repeatStatistics.summary.repeatedBatchCount, '批'],
               ['额外理货', repeatStatistics.summary.extraTallyCount, '次'],
@@ -338,6 +351,9 @@ export function WarehouseCompletedTallyPanel({
               value={repeatStatisticsView}
               onChange={(value) => onRepeatStatisticsViewChange(value as TallyRepeatStatisticsView)}
               options={[
+                ...(canShowAgentData ? [{ label: '按代理简称', value: 'agents' }] : []),
+                { label: '按客户', value: 'customers' },
+                { label: '按业务员', value: 'salespeople' },
                 { label: '按理货人', value: 'operators' },
                 { label: '重复批次明细', value: 'batches' }
               ]}
@@ -347,7 +363,48 @@ export function WarehouseCompletedTallyPanel({
             </Text>
           </div>
 
-          {repeatStatisticsView === 'operators' ? (
+          {((canShowAgentData ? ['agents', 'customers', 'salespeople'] : ['customers', 'salespeople']) as TallyRepeatStatisticsView[]).includes(repeatStatisticsView) ? (
+            <ManagedTable<TallyRepeatDimensionRow>
+              rowKey={(record) => 'agentShortName' in record
+                ? `agent:${record.agentShortName}`
+                : 'customerCode' in record
+                  ? `customer:${record.customerCode}`
+                  : `salesperson:${record.salesperson}`}
+              aria-label="货物归属重复理货统计"
+              dataSource={repeatStatisticsView === 'agents'
+                ? repeatStatistics.agents
+                : repeatStatisticsView === 'customers'
+                  ? repeatStatistics.customers
+                  : repeatStatistics.salespeople}
+              loading={repeatStatisticsLoading}
+              size="small"
+              pagination={tenRowTablePagination}
+              columnSettings={false}
+              recordDetail={false}
+              minimumScrollX={1180}
+              scroll={{ x: 1180 }}
+              columns={[
+                {
+                  title: repeatStatisticsView === 'agents' ? '代理简称' : repeatStatisticsView === 'customers' ? '客户' : '业务员',
+                  key: 'dimension',
+                  width: 190,
+                  render: (_, record) => 'agentShortName' in record
+                    ? record.agentShortName
+                    : 'customerCode' in record
+                      ? `${record.customerCode}${record.customerName ? ` - ${record.customerName}` : ''}`
+                      : record.salesperson
+                },
+                { title: '统计期理货', dataIndex: 'tallyCount', width: 120, align: 'right', render: (value: number) => <strong>{value} 次</strong> },
+                { title: '涉及批次', dataIndex: 'completedBatchCount', width: 110, align: 'right', render: (value: number) => `${value} 批` },
+                { title: '重复批次', dataIndex: 'repeatedBatchCount', width: 110, align: 'right', render: (value: number) => value ? <Tag color="warning">{value}</Tag> : '0' },
+                { title: '重复理货', dataIndex: 'extraTallyCount', width: 110, align: 'right', render: (value: number) => `${value} 次` },
+                { title: '重复率', dataIndex: 'repeatRate', width: 100, align: 'right', render: (value: number) => `${value.toFixed(1)}%` },
+                { title: '单批最高', dataIndex: 'maxTallyCount', width: 110, align: 'right', render: (value: number) => `${value} 次` },
+                { title: '最近完成', dataIndex: 'latestCompletedAt', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+                { title: '最近重复', dataIndex: 'latestRepeatedAt', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' }
+              ]}
+            />
+          ) : repeatStatisticsView === 'operators' ? (
             <ManagedTable<WarehouseTallyRepeatOperatorSummary>
               rowKey="operator"
               aria-label="理货人重复理货统计"
@@ -361,7 +418,7 @@ export function WarehouseCompletedTallyPanel({
               scroll={{ x: 980 }}
               columns={[
                 { title: '理货人', dataIndex: 'operator', width: 140 },
-                { title: '完成理货', dataIndex: 'completedTaskCount', width: 110, align: 'right', render: (value: number) => `${value} 次` },
+                { title: '统计期理货', dataIndex: 'tallyCount', width: 110, align: 'right', render: (value: number) => `${value} 次` },
                 { title: '参与批次', dataIndex: 'completedBatchCount', width: 110, align: 'right' },
                 { title: '重复批次', dataIndex: 'repeatedBatchCount', width: 110, align: 'right', render: (value: number) => value ? <Tag color="warning">{value}</Tag> : '0' },
                 { title: '重复理货', dataIndex: 'extraTallyCount', width: 110, align: 'right', render: (value: number) => `${value} 次` },
@@ -395,12 +452,14 @@ export function WarehouseCompletedTallyPanel({
               minimumScrollX={1420}
               scroll={{ x: 1420 }}
               columns={[
+                ...(canShowAgentData ? [{ title: '代理简称', dataIndex: 'agentShortName', width: 150, render: (value?: string) => value || '未关联代理' }] : []),
                 { title: '业务员', dataIndex: 'salesperson', width: 130 },
                 { title: '理货人', dataIndex: 'tallyOperators', width: 150, render: (value: string[]) => value.join('、') || '-' },
                 { title: '客户编号', dataIndex: 'customerCode', width: 120 },
                 { title: '来源组合号', dataIndex: 'sourceCombinedOrderNo', width: 220 },
                 { title: '首次任务号', dataIndex: 'rootTaskNo', width: 190 },
-                { title: '理货次数', dataIndex: 'tallyCount', width: 100, align: 'right', render: (value: number) => <Tag color={value > 2 ? 'error' : 'warning'}>{value} 次</Tag> },
+                { title: '统计期次数', dataIndex: 'periodTallyCount', width: 110, align: 'right', render: (value: number) => <Tag color={value > 2 ? 'error' : 'warning'}>{value} 次</Tag> },
+                { title: '总理货次数', dataIndex: 'tallyCount', width: 110, align: 'right', render: (value: number) => `${value} 次` },
                 { title: '首次完成', dataIndex: 'firstCompletedAt', width: 170, render: (value: string) => formatBeijingDateTime(value) },
                 { title: '最近完成', dataIndex: 'lastCompletedAt', width: 170, render: (value: string) => formatBeijingDateTime(value) },
                 { title: '最近需求', dataIndex: 'latestTallyRequirement', width: 220, ellipsis: true },

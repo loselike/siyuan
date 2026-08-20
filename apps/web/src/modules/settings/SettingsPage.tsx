@@ -13,9 +13,14 @@ import { addRowsWorksheet, createWorkbook, downloadWorkbook, loadExcel, readWork
 import { formatBeijingDate, formatBeijingDateTime, formatBeijingDateTimeInputValue, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, createNoticeMessage, renderFilterActions, renderFilterField, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import {
+  getPermissionControls,
   getPermissionGroupAccessState,
   getPermissionGroupAccessControl,
+  filterPermissionControlsForRole,
+  isPermissionAssignableForRole,
   isUiPreferencePermission,
+  updateFinanceOrderFeePermission,
+  updatePermissionControl,
   updatePermissionGroupAccess
 } from './rolePermissionPresentation';
 import { createUserGroupSiteOptions, matchesUserGroupSiteOption } from './userGroupSiteOptions';
@@ -33,15 +38,15 @@ import {
   pricingMarkupPermissionControls,
   pricingMarkupPermissionCode,
   orderEntryPermissionControls,
+  orderFeePermissionControls,
   orderEntryDraftPermissionControls,
   pendingReviewPermissionControls,
   customerServiceDataConfirmPermissionControls,
   customerServicePendingRoutingPermissionControls,
   customerServiceTransferPermissionControls,
-  marketPendingRoutingMaskControls,
-  marketRoutedMaskControls,
-  isMarketPendingRoutingMaskPermission,
-  isMarketRoutedMaskPermission,
+  customerServiceViewPermissionFor,
+  updateGlobalFieldMaskPermissions,
+  updateOrderFeePermission,
   type PermissionWorkspaceKey
 } from './rolePermissionCatalog';
 
@@ -412,16 +417,20 @@ export function SettingsPage({
   }
 
   async function deleteRoleGroup(role: RolePermissionRow) {
-    const deleted = await apiClient.deleteRoleGroup(role.key);
-    setRoleMatrix((current) => current ? { ...current, roles: current.roles.filter((item) => item.key !== role.key) } : current);
-    setDraftPermissions((current) => {
-      const next = { ...current };
-      delete next[role.key];
-      return next;
-    });
-    setSelectedRoleGroupKey(null);
-    setRoleGroupDetailOpen(false);
-    setSettingsNotice(`${deleted.label} 已删除`);
+    try {
+      const deleted = await apiClient.deleteRoleGroup(role.key);
+      setRoleMatrix((current) => current ? { ...current, roles: current.roles.filter((item) => item.key !== role.key) } : current);
+      setDraftPermissions((current) => {
+        const next = { ...current };
+        delete next[role.key];
+        return next;
+      });
+      setSelectedRoleGroupKey(null);
+      setRoleGroupDetailOpen(false);
+      setSettingsNotice(`${deleted.label} 已删除`);
+    } catch (error) {
+      setSettingsNotice(`删除用户组失败：${error instanceof Error ? error.message : '请稍后重试'}`);
+    }
   }
 
   function openRolePermissionCopy(role: RolePermissionRow) {
@@ -737,6 +746,12 @@ export function SettingsPage({
   const selectedRoleGrantedPermissions = selectedPermissionRole
     ? draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions
     : [];
+  const selectedAssignableWorkspacePermissions = useMemo(
+    () => selectedWorkspacePermissions?.[1].filter((permission) =>
+      isPermissionAssignableForRole(selectedPermissionRole?.key, permission.code, selectedRoleGrantedPermissions)
+    ) ?? [],
+    [selectedPermissionRole?.key, selectedRoleGrantedPermissions, selectedWorkspacePermissions]
+  );
   const selectedPermissionAccessState = selectedPermissionAccessControl
     ? getPermissionGroupAccessState(
         selectedWorkspacePermissions![0],
@@ -751,14 +766,19 @@ export function SettingsPage({
   const selectedPendingReview = selectedWorkspacePermissions?.[0] === '业务管理 / 待审核运单';
   const selectedWarehouseEntry = selectedWorkspacePermissions?.[0].startsWith('仓库管理 / ') ?? false;
   const selectedWarehouseRentScope = selectedWorkspacePermissions?.[0] === '仓库管理 / 仓租数据范围';
-  const selectedMarketPendingRouting = selectedWorkspacePermissions?.[0] === '市场管理 / 待排货';
-  const selectedMarketRouted = selectedWorkspacePermissions?.[0] === '市场管理 / 已排货';
+  const selectedMarketEntry = selectedWorkspacePermissions?.[0].startsWith('市场管理 / ') ?? false;
+  const selectedFinanceEntry = selectedWorkspacePermissions?.[0].startsWith('财务管理 / ') ?? false;
   const selectedCustomerServicePendingRouting = selectedWorkspacePermissions?.[0] === '客服管理 / 待排货';
   const selectedCustomerServiceDataConfirm = selectedWorkspacePermissions?.[0] === '客服管理 / 数据确认';
   const selectedCustomerServiceTransfer = selectedWorkspacePermissions?.[0] === '客服管理 / 转单号';
+  const selectedCustomerServiceEntry = selectedWorkspacePermissions?.[0].startsWith('客服管理 / ') ?? false;
   const selectedOrderEntryPermissionStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
     return orderEntryPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedOrderFeePermissionStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return orderFeePermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
   }, [selectedRoleGrantedPermissions]);
   const selectedOrderEntryDraftPermissionStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
@@ -768,26 +788,95 @@ export function SettingsPage({
     const granted = new Set(selectedRoleGrantedPermissions);
     return pendingReviewPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
   }, [selectedRoleGrantedPermissions]);
-  const selectedMarketPendingRoutingMaskStates = useMemo(() => {
+  const selectedMarketPermissionStates = useMemo(() => {
+    if (!selectedMarketEntry || !selectedWorkspacePermissions) return [];
     const granted = new Set(selectedRoleGrantedPermissions);
-    return marketPendingRoutingMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
-  const selectedMarketRoutedMaskStates = useMemo(() => {
+    return filterPermissionControlsForRole(
+      selectedPermissionRole?.key,
+      getPermissionControls(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1]),
+      selectedRoleGrantedPermissions
+    )
+      .map((control) => ({ ...control, checked: control.codes.every((code) => granted.has(code)) }));
+  }, [selectedMarketEntry, selectedPermissionRole?.key, selectedRoleGrantedPermissions, selectedWorkspacePermissions]);
+  const selectedFinancePermissionStates = useMemo(() => {
+    if (!selectedFinanceEntry || !selectedWorkspacePermissions) return [];
     const granted = new Set(selectedRoleGrantedPermissions);
-    return marketRoutedMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
+    return filterPermissionControlsForRole(
+      selectedPermissionRole?.key,
+      getPermissionControls(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1]),
+      selectedRoleGrantedPermissions
+    )
+      .map((control) => ({ ...control, checked: control.codes.every((code) => granted.has(code)) }));
+  }, [selectedFinanceEntry, selectedPermissionRole?.key, selectedRoleGrantedPermissions, selectedWorkspacePermissions]);
+  const selectedGenericPermissionEntry = Boolean(selectedWorkspacePermissions && (
+    (
+      selectedWorkspacePermissions[0].startsWith('业务管理 / ')
+      && !selectedOrderEntry
+      && !selectedOrderEntryDrafts
+      && !selectedPendingReview
+    )
+    || selectedWorkspacePermissions[0].startsWith('物流轨迹管理 / ')
+    || selectedWorkspacePermissions[0].startsWith('杂费 / ')
+    || selectedWorkspacePermissions[0].startsWith('基础资料库 / ')
+    || selectedWorkspacePermissions[0].startsWith('系统管理 / ')
+    || (
+      selectedWorkspacePermissions[0].startsWith('运营工作台 / ')
+      && !selectedLineShipmentPool
+    )
+  ));
+  const selectedGenericPermissionStates = useMemo(() => {
+    if (!selectedGenericPermissionEntry || !selectedWorkspacePermissions) return [];
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return filterPermissionControlsForRole(
+      selectedPermissionRole?.key,
+      getPermissionControls(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1]),
+      selectedRoleGrantedPermissions
+    )
+      .map((control) => ({ ...control, checked: control.codes.every((code) => granted.has(code)) }));
+  }, [selectedGenericPermissionEntry, selectedPermissionRole?.key, selectedRoleGrantedPermissions, selectedWorkspacePermissions]);
   const selectedCustomerServicePendingRoutingPermissionStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
-    return customerServicePendingRoutingPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
+    return customerServicePendingRoutingPermissionControls
+      .filter((control) => isPermissionAssignableForRole(selectedPermissionRole?.key, control.code, selectedRoleGrantedPermissions))
+      .map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedPermissionRole?.key, selectedRoleGrantedPermissions]);
   const selectedCustomerServiceDataConfirmPermissionStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
-    return customerServiceDataConfirmPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
+    return customerServiceDataConfirmPermissionControls
+      .filter((control) => isPermissionAssignableForRole(selectedPermissionRole?.key, control.code, selectedRoleGrantedPermissions))
+      .map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedPermissionRole?.key, selectedRoleGrantedPermissions]);
   const selectedCustomerServiceTransferPermissionStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
-    return customerServiceTransferPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
+    return customerServiceTransferPermissionControls
+      .filter((control) => isPermissionAssignableForRole(selectedPermissionRole?.key, control.code, selectedRoleGrantedPermissions))
+      .map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedPermissionRole?.key, selectedRoleGrantedPermissions]);
+  const selectedCustomerServiceGenericPermissionStates = useMemo(() => {
+    if (!selectedCustomerServiceEntry || !selectedWorkspacePermissions) return [];
+    const explicitCodes = new Set([
+      ...customerServicePendingRoutingPermissionControls.map((control) => control.code),
+      ...customerServiceDataConfirmPermissionControls.map((control) => control.code),
+      ...customerServiceTransferPermissionControls.map((control) => control.code)
+    ]);
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return filterPermissionControlsForRole(
+      selectedPermissionRole?.key,
+      getPermissionControls(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1]),
+      selectedRoleGrantedPermissions
+    )
+      .filter((control) => !control.codes.every((code) => explicitCodes.has(code)))
+      .map((control) => ({ ...control, checked: control.codes.every((code) => granted.has(code)) }));
+  }, [selectedCustomerServiceEntry, selectedPermissionRole?.key, selectedRoleGrantedPermissions, selectedWorkspacePermissions]);
+  const selectedLineShipmentBasePermissionStates = useMemo(() => {
+    if (!selectedLineShipmentPool || !selectedWorkspacePermissions) return [];
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return filterPermissionControlsForRole(
+      selectedPermissionRole?.key,
+      getPermissionControls(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1]),
+      selectedRoleGrantedPermissions
+    ).map((control) => ({ ...control, checked: control.codes.every((code) => granted.has(code)) }));
+  }, [selectedLineShipmentPool, selectedPermissionRole?.key, selectedRoleGrantedPermissions, selectedWorkspacePermissions]);
   const selectedLineShipmentStagePermissionStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
     return lineShipmentStageEditControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
@@ -801,7 +890,7 @@ export function SettingsPage({
   const selectedPricingBusinessEntry = selectedPricingLookupEntry
     || selectedPricingMarkupEntry
     || selectedWorkspacePermissions?.[0] === '报价查价 / 价格表管理';
-  const selectedDirectBusinessGrantEntry = selectedPricingBusinessEntry || selectedOrderEntry || selectedOrderEntryDrafts || selectedPendingReview || selectedWarehouseEntry;
+  const selectedDirectBusinessGrantEntry = selectedPricingBusinessEntry || selectedOrderEntry || selectedOrderEntryDrafts || selectedPendingReview || selectedWarehouseEntry || selectedMarketEntry || selectedFinanceEntry || selectedCustomerServiceEntry || selectedGenericPermissionEntry || selectedLineShipmentPool;
   const selectedPricingMarkupStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
     return pricingMarkupPermissionControls.map((control) => ({
@@ -976,18 +1065,6 @@ export function SettingsPage({
           [roleKey]: next.filter((code) => !orderEntryPermissionControls.some((control) => control.code === code))
         };
       }
-      if (group === '市场管理 / 待排货' && !checked) {
-        return {
-          ...current,
-          [roleKey]: next.filter((code) => !isMarketPendingRoutingMaskPermission(code))
-        };
-      }
-      if (group === '市场管理 / 已排货' && !checked) {
-        return {
-          ...current,
-          [roleKey]: next.filter((code) => !isMarketRoutedMaskPermission(code))
-        };
-      }
       return {
         ...current,
         [roleKey]: !checked && group === '运营工作台 / 专线运单池'
@@ -1039,11 +1116,42 @@ export function SettingsPage({
     });
   }
 
+  function toggleOrderFeePermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+    setDraftPermissions((current) => ({
+      ...current,
+      [roleKey]: updateOrderFeePermission(
+        current[roleKey] ?? selectedPermissionRole?.permissions ?? [],
+        code,
+        checked
+      )
+    }));
+  }
+
+  function shouldKeepCustomerServiceException(permission: PermissionKey, parentCode: PermissionKey) {
+    return (parentCode === 'customer-service:problem:view' && permission === 'customer-service:problem:after-sale-view')
+      || (parentCode === 'customer-service:signed:view' && permission === 'customer-service:signed:after-sale-view');
+  }
+
   function toggleCustomerServicePermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
     setDraftPermissions((current) => {
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
-      if (checked) next.add(code);
-      else next.delete(code);
+      if (checked) {
+        next.add(code);
+        const viewPermission = customerServiceViewPermissionFor(code);
+        if (viewPermission) next.add(viewPermission);
+      } else {
+        next.delete(code);
+        if (code.endsWith(':view')) {
+          const sectionPrefix = `${code.slice(0, -':view'.length)}:`;
+          for (const permission of [...next]) {
+            if (
+              permission.startsWith(sectionPrefix)
+              && !permission.endsWith('-block')
+              && !shouldKeepCustomerServiceException(permission, code)
+            ) next.delete(permission);
+          }
+        }
+      }
       return { ...current, [roleKey]: [...next] };
     });
   }
@@ -1113,10 +1221,24 @@ export function SettingsPage({
     });
   }
 
-  function toggleAllCustomerServicePermissions(roleKey: RoleKey, controls: Array<{ code: PermissionKey }>, checked: boolean) {
+  function clearAllCustomerServicePermissions(roleKey: RoleKey, controls: Array<{ code: PermissionKey }>) {
     setDraftPermissions((current) => {
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
-      controls.forEach((control) => checked ? next.add(control.code) : next.delete(control.code));
+      controls.forEach((control) => {
+        next.delete(control.code);
+        if (control.code.endsWith(':view')) {
+          const sectionPrefix = `${control.code.slice(0, -':view'.length)}:`;
+          for (const permission of [...next]) {
+            if (
+              permission.startsWith(sectionPrefix)
+              && !permission.endsWith('-block')
+              && !shouldKeepCustomerServiceException(permission, control.code)
+            ) {
+              next.delete(permission);
+            }
+          }
+        }
+      });
       return { ...current, [roleKey]: [...next] };
     });
   }
@@ -1130,24 +1252,115 @@ export function SettingsPage({
     });
   }
 
-  function toggleGlobalFieldMask(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+  function toggleMarketPermissionControl(roleKey: RoleKey, codes: PermissionKey[], checked: boolean) {
     setDraftPermissions((current) => {
-      const granted = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
-      const agentDataCode = globalFieldMaskPermissionCode('agent-data');
-      const impliedAgentCodes = [
-        globalFieldMaskPermissionCode('agent-short-name'),
-        globalFieldMaskPermissionCode('agent-company-name'),
-        globalFieldMaskPermissionCode('agent-channel')
-      ];
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      const controls = selectedMarketPermissionStates;
+      const groupCodes = controls.flatMap((control) => control.codes);
+      const entryCodes = controls[0]?.codes ?? [];
       if (checked) {
-        granted.add(code);
-        if (code === agentDataCode) impliedAgentCodes.forEach((item) => granted.add(item));
+        codes.forEach((code) => next.add(code));
+        entryCodes.forEach((code) => next.add(code));
+      } else if (codes.some((code) => entryCodes.includes(code))) {
+        groupCodes.forEach((code) => next.delete(code));
       } else {
-        granted.delete(code);
-        if (impliedAgentCodes.includes(code)) granted.delete(agentDataCode);
+        codes.forEach((code) => next.delete(code));
       }
-      return { ...current, [roleKey]: Array.from(granted) };
+      return { ...current, [roleKey]: [...next] };
     });
+  }
+
+  function clearAllMarketPermissions(roleKey: RoleKey) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      selectedMarketPermissionStates.flatMap((control) => control.codes)
+        .forEach((code) => next.delete(code));
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function toggleFinancePermissionControl(roleKey: RoleKey, codes: PermissionKey[], checked: boolean) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      const groupCodes = selectedFinancePermissionStates.flatMap((control) => control.codes);
+      const entryCodes = selectedFinancePermissionStates.find((control) => control.category === '页面访问')?.codes ?? [];
+      if (selectedWorkspacePermissions?.[0] === '财务管理 / 单票费用') {
+        return {
+          ...current,
+          [roleKey]: updateFinanceOrderFeePermission([...next], codes, checked)
+        };
+      }
+      if (checked) {
+        codes.forEach((code) => next.add(code));
+        entryCodes.forEach((code) => next.add(code));
+      } else if (codes.some((code) => entryCodes.includes(code))) {
+        groupCodes.forEach((code) => next.delete(code));
+      } else {
+        codes.forEach((code) => next.delete(code));
+      }
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function clearAllFinancePermissions(roleKey: RoleKey) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      selectedFinancePermissionStates.flatMap((control) => control.codes)
+        .forEach((code) => next.delete(code));
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function toggleGenericPermissionControl(roleKey: RoleKey, controlId: string, checked: boolean) {
+    if (!selectedWorkspacePermissions) return;
+    const controls = filterPermissionControlsForRole(
+      selectedPermissionRole?.key,
+      getPermissionControls(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1]),
+      selectedRoleGrantedPermissions
+    );
+    const control = controls.find((item) => item.id === controlId);
+    if (!control) return;
+    const rawAccessControl = getPermissionGroupAccessControl(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1]);
+    const accessControl = rawAccessControl
+      ? filterPermissionControlsForRole(selectedPermissionRole?.key, [rawAccessControl], selectedRoleGrantedPermissions)[0] ?? null
+      : null;
+    setDraftPermissions((current) => {
+      const granted = current[roleKey] ?? selectedPermissionRole?.permissions ?? [];
+      const togglesAccess = accessControl?.codes.some((code) => control.codes.includes(code)) ?? false;
+      let next = togglesAccess && !checked
+        ? updatePermissionGroupAccess(granted, selectedWorkspacePermissions[0], selectedWorkspacePermissions[1], false)
+        : updatePermissionControl(granted, control, checked);
+      if (checked && !togglesAccess && accessControl) {
+        const nextSet = new Set(next);
+        accessControl.codes.forEach((code) => nextSet.add(code));
+        next = [...nextSet];
+      }
+      return { ...current, [roleKey]: next };
+    });
+  }
+
+  function clearAllGenericPermissions(roleKey: RoleKey) {
+    if (!selectedWorkspacePermissions) return;
+    setDraftPermissions((current) => ({
+      ...current,
+      [roleKey]: updatePermissionGroupAccess(
+        current[roleKey] ?? selectedPermissionRole?.permissions ?? [],
+        selectedWorkspacePermissions[0],
+        selectedWorkspacePermissions[1],
+        false
+      )
+    }));
+  }
+
+  function toggleGlobalFieldMask(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+    setDraftPermissions((current) => ({
+      ...current,
+      [roleKey]: updateGlobalFieldMaskPermissions(
+        current[roleKey] ?? selectedPermissionRole?.permissions ?? [],
+        code,
+        checked
+      )
+    }));
   }
 
   function toggleLineShipmentStagePermission(
@@ -1170,21 +1383,12 @@ export function SettingsPage({
     });
   }
 
-  function toggleAllLineShipmentStagePermissions(roleKey: RoleKey, checked: boolean) {
+  function clearAllLineShipmentStagePermissions(roleKey: RoleKey) {
     setDraftPermissions((current) => {
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
       lineShipmentStageEditControls.forEach((control) => {
-        if (checked) {
-          next.add(control.code);
-          next.delete(`operations:line-shipment:stage-edit-block:${control.stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey);
-        } else next.delete(control.code);
+        next.delete(control.code);
       });
-      if (checked) {
-        next.add('operations:line-shipment:view');
-        next.add('operations:line-shipment:detail');
-        next.add('operations:line-shipment:process');
-        next.add('operations:line-shipment:status-update');
-      }
       return { ...current, [roleKey]: [...next] };
     });
   }
@@ -1213,23 +1417,25 @@ export function SettingsPage({
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
       const code = pricingMarkupPermissionCode(module, action);
       const viewCode = pricingMarkupPermissionCode(module, 'view');
-      const editCode = pricingMarkupPermissionCode(module, 'edit');
       if (checked) {
         next.add(code);
-        if (action === 'edit') next.add(viewCode);
+        next.add(viewCode);
       } else {
         next.delete(code);
-        if (action === 'view') next.delete(editCode);
+        if (action === 'view') {
+          const prefix = `pricing:markup:${module}:`;
+          Array.from(next).filter((permission) => permission.startsWith(prefix)).forEach((permission) => next.delete(permission));
+        }
       }
       return { ...current, [roleKey]: [...next] };
     });
   }
 
-  function setAllPricingMarkupPermissions(roleKey: RoleKey, checked: boolean) {
+  function clearAllPricingMarkupPermissions(roleKey: RoleKey) {
     setDraftPermissions((current) => {
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
       pricingMarkupPermissionControls.forEach((control) => {
-        control.actions.forEach((action) => checked ? next.add(action.code) : next.delete(action.code));
+        control.actions.forEach((action) => next.delete(action.code));
       });
       return { ...current, [roleKey]: [...next] };
     });
@@ -1238,8 +1444,12 @@ export function SettingsPage({
   function togglePricingPriceBookPermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
     setDraftPermissions((current) => {
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
-      if (checked) next.add(code);
-      else next.delete(code);
+      if (checked) {
+        next.add(code);
+        next.add('pricing:price-books:view');
+      } else if (code === 'pricing:price-books:view') {
+        Array.from(next).filter((permission) => permission.startsWith('pricing:price-books:')).forEach((permission) => next.delete(permission));
+      } else next.delete(code);
       return { ...current, [roleKey]: [...next] };
     });
   }
@@ -2158,33 +2368,27 @@ export function SettingsPage({
                         || group === '报价查价 / 代理加价规则'
                         || group === '报价查价 / 价格表管理'
                         || group === '业务管理 / 草稿箱'
-                        || group.startsWith('仓库管理 / ');
+                        || group.startsWith('市场管理 / ')
+                        || group.startsWith('仓库管理 / ')
+                        || group.startsWith('财务管理 / ');
                       return (
                         <div
-                          className={`role-permission-module-card${selected ? ' is-active is-current' : ''}${administrator || accessState.checked ? ' is-open' : ''}`}
+                          className={`role-permission-module-card${selected ? ' is-active is-current' : ''}${administrator || accessState.checked ? ' is-open' : ''}${directBusinessGrantGroup ? ' is-direct' : ''}`}
                           data-current={selected ? 'true' : 'false'}
                           key={group}
                         >
                           <button
                             type="button"
                             className="role-permission-module-select"
+                            aria-label={group.replace(`${permissionWorkspace.label} / `, '')}
                             onClick={() => {
                               setSelectedPermissionWorkspaceView('entries');
                               setSelectedWorkspacePermissionGroup(group);
                             }}
                           >
-                            <span>
-                              <span className="role-permission-module-title">
-                                <Text strong>{group.replace(`${permissionWorkspace.label} / `, '')}</Text>
-                                {selected ? <span className="role-permission-module-current">当前</span> : null}
-                              </span>
-                              <Text type="secondary">{administrator
-                                ? '管理员固定全部开放'
-                                : directBusinessGrantGroup
-                                  ? (accessState.checked ? '已按右侧功能授权开放' : '由右侧功能授权自动开放')
-                                  : accessState.checked ? '全部操作权限随入口生效' : '未开放入口'}</Text>
+                            <span className="role-permission-module-title">
+                              <Text strong>{group.replace(`${permissionWorkspace.label} / `, '')}</Text>
                             </span>
-                            <Tag color={administrator || accessState.checked ? 'blue' : undefined}>{administrator || accessState.checked ? '已开放' : directBusinessGrantGroup ? '待分配' : '未开放'}</Tag>
                           </button>
                           {!directBusinessGrantGroup ? <Checkbox
                             aria-label={`授权进入${group.replace(`${permissionWorkspace.label} / `, '')}`}
@@ -2268,7 +2472,7 @@ export function SettingsPage({
                         <div className="role-permission-section-heading">
                           <Text strong>查价模块授权</Text>
                           <Tag color={selectedPricingLookupStates.some((control) => control.checked) ? 'blue' : 'orange'}>
-                            {selectedPricingLookupStates.filter((control) => control.checked).length}/7 个模块已分配
+                            {selectedPricingLookupStates.filter((control) => control.checked).length}/{selectedPricingLookupStates.length} 个模块已分配
                           </Tag>
                         </div>
                         <div className="role-permission-option-grid role-permission-stage-block-grid">
@@ -2292,8 +2496,13 @@ export function SettingsPage({
                           <Text strong>模块功能授权</Text>
                           <Space size={6}>
                             <Tag color="blue">{selectedPricingMarkupStates.reduce((total, control) => total + control.actions.filter((action) => action.checked).length, 0)}/14 已授权</Tag>
-                            <Button size="small" onClick={() => setAllPricingMarkupPermissions(selectedPermissionRole.key, true)}>全部勾选</Button>
-                            <Button size="small" onClick={() => setAllPricingMarkupPermissions(selectedPermissionRole.key, false)}>全部取消</Button>
+                            <Button
+                              size="small"
+                              onClick={() => clearAllPricingMarkupPermissions(selectedPermissionRole.key)}
+                              disabled={selectedPricingMarkupStates.every((control) => control.actions.every((action) => !action.checked))}
+                            >
+                              全部取消
+                            </Button>
                           </Space>
                         </div>
                         <div className="role-permission-option-grid role-permission-stage-block-grid role-permission-pricing-module-grid">
@@ -2358,7 +2567,7 @@ export function SettingsPage({
                     ) : !selectedDirectBusinessGrantEntry && !selectedPermissionAccessState.checked ? (
                       <div className="role-permission-detail-empty">
                         <Text strong>{`先开放“进入${selectedWorkspacePermissions?.[0]?.replace(`${permissionWorkspace.label} / `, '') ?? '该模块'}”`}</Text>
-                        <Text type="secondary">勾选二级入口后，该入口下现有的查看、录入、修改、审核等操作权限会一并生效。</Text>
+                        <Text type="secondary">开放查看入口后，再按需勾选具体操作权限。</Text>
                       </div>
                     ) : selectedOrderEntry ? (
                       <div className="role-permission-stage-block-panel">
@@ -2382,28 +2591,48 @@ export function SettingsPage({
                             </label>
                           ))}
                         </div>
+                        <div className="role-permission-section-heading">
+                          <Text strong>单票费用授权</Text>
+                          <Tag color={selectedOrderFeePermissionStates.some((control) => control.checked) ? 'blue' : 'orange'}>
+                            {selectedOrderFeePermissionStates.filter((control) => control.checked).length}/{selectedOrderFeePermissionStates.length} 已授权
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedOrderFeePermissionStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={`分配单票费用${control.label}`}
+                                checked={control.checked}
+                                onChange={(event) => toggleOrderFeePermission(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
                       </div>
                     ) : selectedWarehouseEntry ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
                           <Text strong>{selectedWarehouseRentScope ? '仓租数据范围' : '功能授权'}</Text>
                           <Tag color="blue">
-                            {selectedWorkspacePermissions[1].filter((permission) => selectedRoleGrantedPermissions.includes(permission.code)).length}/{selectedWorkspacePermissions[1].length} 已授权
+                            {selectedAssignableWorkspacePermissions.filter((permission) => selectedRoleGrantedPermissions.includes(permission.code)).length}/{selectedAssignableWorkspacePermissions.length} 已授权
                           </Tag>
                         </div>
                         {selectedWarehouseRentScope ? (
                           <Radio.Group
                             aria-label="仓租数据范围"
-                            value={selectedWorkspacePermissions[1].find((permission) => selectedRoleGrantedPermissions.includes(permission.code))?.code}
+                            value={selectedAssignableWorkspacePermissions.find((permission) => selectedRoleGrantedPermissions.includes(permission.code))?.code}
                             onChange={(event) => setWarehouseRentScope(selectedPermissionRole.key, event.target.value as PermissionKey)}
                           >
                             <Space direction="vertical" size={10}>
-                              {selectedWorkspacePermissions[1].map((permission) => <Radio key={permission.code} value={permission.code}>{permission.label}</Radio>)}
+                              {selectedAssignableWorkspacePermissions.map((permission) => <Radio key={permission.code} value={permission.code}>{permission.label}</Radio>)}
                             </Space>
                           </Radio.Group>
                         ) : (
                           <div className="role-permission-option-grid role-permission-stage-block-grid">
-                            {selectedWorkspacePermissions[1].map((permission) => {
+                            {selectedAssignableWorkspacePermissions.map((permission) => {
                               const checked = selectedRoleGrantedPermissions.includes(permission.code);
                               return (
                                 <label className={`role-permission-option role-permission-compact-option${checked ? ' role-permission-granted' : ''}`} key={permission.code}>
@@ -2419,47 +2648,91 @@ export function SettingsPage({
                           </div>
                         )}
                       </div>
-                    ) : selectedMarketPendingRouting ? (
+                    ) : selectedMarketEntry ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
-                          <Space size={8}><Space size={8}><Text strong>待排货授权</Text><Button size="small" onClick={() => toggleAllCustomerServicePermissions(selectedPermissionRole.key, customerServicePendingRoutingPermissionControls, !selectedCustomerServicePendingRoutingPermissionStates.every((control) => control.checked))}>全部勾选/取消</Button></Space><Button size={"small"} onClick={() => toggleAllCustomerServicePermissions(selectedPermissionRole.key, customerServicePendingRoutingPermissionControls, !selectedCustomerServicePendingRoutingPermissionStates.every((control) => control.checked))}>全部勾选/取消</Button></Space>
-                          <Tag color={selectedMarketPendingRoutingMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedMarketPendingRoutingMaskStates.some((control) => control.checked) ? '已分配权限' : '未分配权限'}
-                          </Tag>
+                          <Space size={8}>
+                            <Text strong>功能授权</Text>
+                            <Tag color="blue">{selectedMarketPermissionStates.filter((control) => control.checked).length}/{selectedMarketPermissionStates.length} 已授权</Tag>
+                          </Space>
+                          <Button
+                            size="small"
+                            onClick={() => clearAllMarketPermissions(selectedPermissionRole.key)}
+                            disabled={selectedMarketPermissionStates.every((control) => !control.checked)}
+                          >
+                            全部取消
+                          </Button>
                         </div>
                         <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedMarketPendingRoutingMaskStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
+                          {selectedMarketPermissionStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.id}>
                               <span className="role-permission-option-copy role-permission-compact-copy">
                                 <Text strong>{control.label}</Text>
                               </span>
                               <Checkbox
-                                aria-label={control.label}
+                                aria-label={`分配${selectedWorkspacePermissions[0].replace('市场管理 / ', '')}${control.label}`}
                                 checked={control.checked}
-                                onChange={(event) => togglePermissionFlag(selectedPermissionRole.key, control.code, event.target.checked)}
+                                onChange={(event) => toggleMarketPermissionControl(selectedPermissionRole.key, control.codes, event.target.checked)}
                               />
                             </label>
                           ))}
                         </div>
                       </div>
-                    ) : selectedMarketRouted ? (
+                    ) : selectedFinanceEntry ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
-                          <Text strong>已排货屏蔽</Text>
-                          <Tag color={selectedMarketRoutedMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedMarketRoutedMaskStates.some((control) => control.checked) ? '已分配权限' : '未分配权限'}
-                          </Tag>
+                          <Space size={8}>
+                            <Text strong>功能授权</Text>
+                            <Tag color="blue">{selectedFinancePermissionStates.filter((control) => control.checked).length}/{selectedFinancePermissionStates.length} 已授权</Tag>
+                          </Space>
+                          <Button
+                            size="small"
+                            onClick={() => clearAllFinancePermissions(selectedPermissionRole.key)}
+                            disabled={selectedFinancePermissionStates.every((control) => !control.checked)}
+                          >
+                            全部取消
+                          </Button>
                         </div>
                         <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedMarketRoutedMaskStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
+                          {selectedFinancePermissionStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.id}>
                               <span className="role-permission-option-copy role-permission-compact-copy">
                                 <Text strong>{control.label}</Text>
                               </span>
                               <Checkbox
-                                aria-label={control.label}
+                                aria-label={`分配${selectedWorkspacePermissions[0].replace('财务管理 / ', '')}${control.label}`}
                                 checked={control.checked}
-                                onChange={(event) => togglePermissionFlag(selectedPermissionRole.key, control.code, event.target.checked)}
+                                onChange={(event) => toggleFinancePermissionControl(selectedPermissionRole.key, control.codes, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedGenericPermissionEntry ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Space size={8}>
+                            <Text strong>功能授权</Text>
+                            <Tag color="blue">{selectedGenericPermissionStates.filter((control) => control.checked).length}/{selectedGenericPermissionStates.length} 已授权</Tag>
+                          </Space>
+                          <Button
+                            size="small"
+                            onClick={() => clearAllGenericPermissions(selectedPermissionRole.key)}
+                            disabled={selectedGenericPermissionStates.every((control) => !control.checked)}
+                          >
+                            全部取消
+                          </Button>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedGenericPermissionStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.id}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={`分配${selectedWorkspacePermissions[0].split(' / ')[1] ?? ''}${control.label}`}
+                                checked={control.checked}
+                                onChange={(event) => toggleGenericPermissionControl(selectedPermissionRole.key, control.id, event.target.checked)}
                               />
                             </label>
                           ))}
@@ -2468,7 +2741,7 @@ export function SettingsPage({
                     ) : selectedCustomerServiceDataConfirm ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
-                          <Space size={8}><Text strong>数据确认授权</Text><Button size="small" onClick={() => toggleAllCustomerServicePermissions(selectedPermissionRole.key, customerServiceDataConfirmPermissionControls, !selectedCustomerServiceDataConfirmPermissionStates.every((control) => control.checked))}>全部勾选/取消</Button></Space>
+                          <Space size={8}><Text strong>数据确认授权</Text><Button size="small" onClick={() => clearAllCustomerServicePermissions(selectedPermissionRole.key, customerServiceDataConfirmPermissionControls)} disabled={selectedCustomerServiceDataConfirmPermissionStates.every((control) => !control.checked)}>全部取消</Button></Space>
                           <Tag color={selectedCustomerServiceDataConfirmPermissionStates.some((control) => control.checked) ? 'orange' : 'blue'}>
                             {selectedCustomerServiceDataConfirmPermissionStates.some((control) => control.checked) ? '已分配权限' : '未分配权限'}
                           </Tag>
@@ -2491,7 +2764,7 @@ export function SettingsPage({
                     ) : selectedCustomerServicePendingRouting ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
-                          <Space size={8}><Text strong>待排货授权</Text><Button size="small" onClick={() => toggleAllCustomerServicePermissions(selectedPermissionRole.key, customerServicePendingRoutingPermissionControls, !selectedCustomerServicePendingRoutingPermissionStates.every((control) => control.checked))}>全部勾选/取消</Button></Space>
+                          <Space size={8}><Text strong>待排货授权</Text><Button size="small" onClick={() => clearAllCustomerServicePermissions(selectedPermissionRole.key, customerServicePendingRoutingPermissionControls)} disabled={selectedCustomerServicePendingRoutingPermissionStates.every((control) => !control.checked)}>全部取消</Button></Space>
                           <Tag color={selectedCustomerServicePendingRoutingPermissionStates.some((control) => control.checked) ? 'orange' : 'blue'}>
                             {selectedCustomerServicePendingRoutingPermissionStates.some((control) => control.checked) ? '已分配权限' : '未分配权限'}
                           </Tag>
@@ -2514,7 +2787,7 @@ export function SettingsPage({
                     ) : selectedCustomerServiceTransfer ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
-                          <Space size={8}><Text strong>转单号授权</Text><Button size="small" onClick={() => toggleAllCustomerServicePermissions(selectedPermissionRole.key, customerServiceTransferPermissionControls, !selectedCustomerServiceTransferPermissionStates.every((control) => control.checked))}>全部勾选/取消</Button></Space>
+                          <Space size={8}><Text strong>转单号授权</Text><Button size="small" onClick={() => clearAllCustomerServicePermissions(selectedPermissionRole.key, customerServiceTransferPermissionControls)} disabled={selectedCustomerServiceTransferPermissionStates.every((control) => !control.checked)}>全部取消</Button></Space>
                           <Tag color={selectedCustomerServiceTransferPermissionStates.some((control) => control.checked) ? 'orange' : 'blue'}>
                             {selectedCustomerServiceTransferPermissionStates.some((control) => control.checked) ? '已分配权限' : '未分配权限'}
                           </Tag>
@@ -2534,33 +2807,91 @@ export function SettingsPage({
                           ))}
                         </div>
                       </div>
-                    ) : selectedLineShipmentPool ? (
+                    ) : selectedCustomerServiceEntry ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
                           <Space size={8}>
-                            <Text strong>阶段编辑授权</Text>
-                            <Tag color={selectedLineShipmentStagePermissionStates.some((control) => control.checked) ? 'blue' : 'orange'}>
-                              {selectedLineShipmentStagePermissionStates.filter((control) => control.checked).length}/{selectedLineShipmentStagePermissionStates.length} 个阶段已授权
+                            <Text strong>功能授权</Text>
+                            <Tag color="blue">
+                              {selectedCustomerServiceGenericPermissionStates.filter((control) => control.checked).length}/{selectedCustomerServiceGenericPermissionStates.length} 已授权
                             </Tag>
                           </Space>
                           <Space size={6}>
-                            <Button size="small" onClick={() => toggleAllLineShipmentStagePermissions(selectedPermissionRole.key, true)} disabled={selectedLineShipmentStagePermissionStates.every((control) => control.checked)}>全部勾选</Button>
-                            <Button size="small" onClick={() => toggleAllLineShipmentStagePermissions(selectedPermissionRole.key, false)} disabled={selectedLineShipmentStagePermissionStates.every((control) => !control.checked)}>全部取消</Button>
+                            <Button
+                              size="small"
+                              onClick={() => clearAllCustomerServicePermissions(
+                                selectedPermissionRole.key,
+                                selectedCustomerServiceGenericPermissionStates.flatMap((control) => control.codes).map((code) => ({ code }))
+                              )}
+                              disabled={selectedCustomerServiceGenericPermissionStates.every((control) => !control.checked)}
+                            >
+                              全部取消
+                            </Button>
                           </Space>
                         </div>
                         <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedLineShipmentStagePermissionStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
+                          {selectedCustomerServiceGenericPermissionStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.id}>
                               <span className="role-permission-option-copy role-permission-compact-copy">
                                 <Text strong>{control.label}</Text>
                               </span>
                               <Checkbox
-                                aria-label={control.label}
+                                aria-label={`分配${control.label}`}
                                 checked={control.checked}
-                                onChange={(event) => toggleLineShipmentStagePermission(selectedPermissionRole.key, control.stage, event.target.checked)}
+                                onChange={(event) => control.codes.forEach((code) => toggleCustomerServicePermission(selectedPermissionRole.key, code, event.target.checked))}
                               />
                             </label>
                           ))}
+                        </div>
+                      </div>
+                    ) : selectedLineShipmentPool ? (
+                      <div style={{ display: 'grid', gap: 16 }}>
+                        <div className="role-permission-stage-block-panel">
+                          <div className="role-permission-section-heading">
+                            <Text strong>基础功能授权</Text>
+                            <Tag color="blue">{selectedLineShipmentBasePermissionStates.filter((control) => control.checked).length}/{selectedLineShipmentBasePermissionStates.length} 已授权</Tag>
+                          </div>
+                          <div className="role-permission-option-grid role-permission-stage-block-grid">
+                            {selectedLineShipmentBasePermissionStates.map((control) => (
+                              <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.id}>
+                                <span className="role-permission-option-copy role-permission-compact-copy">
+                                  <Text strong>{control.label}</Text>
+                                </span>
+                                <Checkbox
+                                  aria-label={`分配专线运单池${control.label}`}
+                                  checked={control.checked}
+                                  onChange={(event) => toggleGenericPermissionControl(selectedPermissionRole.key, control.id, event.target.checked)}
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="role-permission-stage-block-panel">
+                          <div className="role-permission-section-heading">
+                            <Space size={8}>
+                              <Text strong>阶段编辑授权</Text>
+                              <Tag color={selectedLineShipmentStagePermissionStates.some((control) => control.checked) ? 'blue' : 'orange'}>
+                                {selectedLineShipmentStagePermissionStates.filter((control) => control.checked).length}/{selectedLineShipmentStagePermissionStates.length} 个阶段已授权
+                              </Tag>
+                            </Space>
+                            <Space size={6}>
+                              <Button size="small" onClick={() => clearAllLineShipmentStagePermissions(selectedPermissionRole.key)} disabled={selectedLineShipmentStagePermissionStates.every((control) => !control.checked)}>全部取消</Button>
+                            </Space>
+                          </div>
+                          <div className="role-permission-option-grid role-permission-stage-block-grid">
+                            {selectedLineShipmentStagePermissionStates.map((control) => (
+                              <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
+                                <span className="role-permission-option-copy role-permission-compact-copy">
+                                  <Text strong>{control.label}</Text>
+                                </span>
+                                <Checkbox
+                                  aria-label={control.label}
+                                  checked={control.checked}
+                                  onChange={(event) => toggleLineShipmentStagePermission(selectedPermissionRole.key, control.stage, event.target.checked)}
+                                />
+                              </label>
+                            ))}
+                          </div>
                         </div>
                       </div>
                     ) : selectedPriceBookManagementEntry ? (

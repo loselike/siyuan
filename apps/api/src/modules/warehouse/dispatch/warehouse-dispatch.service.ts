@@ -8,6 +8,7 @@ import {
 } from './warehouse-dispatch.repository.js';
 
 type WarehouseDispatchDeclarationInput = Parameters<WarehouseDispatchRepository['updateWarehouseDispatchDeclaration']>[2];
+type WarehouseDispatchInboundNoInput = Parameters<WarehouseDispatchRepository['updateWarehouseDispatchInboundNo']>[2];
 type WarehouseHandoverPrintInput = Parameters<WarehouseDispatchRepository['printWarehouseHandover']>[1];
 type ShipmentDispatchInput = Parameters<WarehouseDispatchRepository['dispatchShipment']>[2];
 
@@ -26,6 +27,11 @@ export class WarehouseDispatchService {
 
   updateDeclaration(principal: Principal, shipmentId: string, input: WarehouseDispatchDeclarationInput) {
     return this.repository.updateWarehouseDispatchDeclaration(principal, shipmentId, input);
+  }
+
+  async updateInboundNo(principal: Principal, shipmentId: string, input: WarehouseDispatchInboundNoInput) {
+    await this.ensurePermission(principal, 'warehouse:dispatch-pending:edit');
+    return this.repository.updateWarehouseDispatchInboundNo(principal, shipmentId, input);
   }
 
   handover(principal: Principal, shipmentId: string) {

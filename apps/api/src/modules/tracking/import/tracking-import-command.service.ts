@@ -17,8 +17,7 @@ export class TrackingImportCommandService {
     if (principal.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能批量导入轨迹');
     }
-    await this.ensurePermission(principal, 'tracking:external:import-confirm');
-    await this.ensurePermission(principal, 'tracking:external:overwrite');
+    await this.ensurePermission(principal, 'tracking:external:import');
     return this.repository.importTrackingEvents(principal, input);
   }
 
@@ -27,7 +26,7 @@ export class TrackingImportCommandService {
     await this.repository.recordPermissionDenied(principal, {
       permissions: [permission],
       method: 'SERVER',
-      path: 'warehouse granular action'
+      path: 'tracking/external/import'
     }).catch(() => undefined);
     throw new ForbiddenException('没有访问权限');
   }

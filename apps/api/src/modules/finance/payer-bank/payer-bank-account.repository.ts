@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import type {
   PayerBankAccountListQuery
 } from '@siyuan/shared';
@@ -25,6 +25,11 @@ export type PayerBankAccountCreateData = Omit<
 >;
 
 export type PayerBankAccountUpdateData = Partial<PayerBankAccountCreateData>;
+export type PayerBankAccountPermission =
+  | 'master-data:payer-banks:read'
+  | 'master-data:payer-banks:create'
+  | 'master-data:payer-banks:update'
+  | 'master-data:payer-banks:delete';
 
 export interface PayerBankAccountAuditContext {
   actorId: string;
@@ -35,19 +40,23 @@ export interface PayerBankAccountAuditContext {
 }
 
 export interface PayerBankAccountRepository {
-  findMany(query: PayerBankAccountListQuery): Promise<PayerBankAccountRow[]>;
-  findById(id: string): Promise<PayerBankAccountRow | null>;
-  findByNormalizedAccountNo(accountNoNormalized: string, excludeId?: string): Promise<PayerBankAccountRow | null>;
-  create(data: PayerBankAccountCreateData, audit: PayerBankAccountAuditContext): Promise<PayerBankAccountRow>;
-  update(id: string, data: PayerBankAccountUpdateData, audit: PayerBankAccountAuditContext): Promise<PayerBankAccountRow>;
-  delete(id: string, audit: PayerBankAccountAuditContext): Promise<PayerBankAccountRow>;
+  findMany(principal: Principal, query: PayerBankAccountListQuery): Promise<PayerBankAccountRow[]>;
+  findById(principal: Principal, permission: PayerBankAccountPermission, id: string): Promise<PayerBankAccountRow | null>;
+  findByNormalizedAccountNo(principal: Principal, permission: PayerBankAccountPermission, accountNoNormalized: string, excludeId?: string): Promise<PayerBankAccountRow | null>;
+  create(principal: Principal, data: PayerBankAccountCreateData, audit: PayerBankAccountAuditContext): Promise<PayerBankAccountRow>;
+  update(principal: Principal, id: string, data: PayerBankAccountUpdateData, audit: PayerBankAccountAuditContext): Promise<PayerBankAccountRow>;
+  delete(principal: Principal, id: string, audit: PayerBankAccountAuditContext): Promise<PayerBankAccountRow>;
 }
 
 @Injectable()
 export class PrismaPayerBankAccountRepository implements PayerBankAccountRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(PrismaRepository) private readonly appRepository: PrismaRepository
+  ) {}
 
-  async findMany(query: PayerBankAccountListQuery) {
+  async findMany(principal: Principal, query: PayerBankAccountListQuery) {
+    await this.authorize(principal, 'master-data:payer-banks:read');
     const keyword = query.keyword?.trim();
     return (this.prisma as any).payerBankAccount.findMany({
       where: keyword ? {
@@ -61,11 +70,13 @@ export class PrismaPayerBankAccountRepository implements PayerBankAccountReposit
     });
   }
 
-  async findById(id: string) {
+  async findById(principal: Principal, permission: PayerBankAccountPermission, id: string) {
+    await this.authorize(principal, permission);
     return (this.prisma as any).payerBankAccount.findUnique({ where: { id } });
   }
 
-  async findByNormalizedAccountNo(accountNoNormalized: string, excludeId?: string) {
+  async findByNormalizedAccountNo(principal: Principal, permission: PayerBankAccountPermission, accountNoNormalized: string, excludeId?: string) {
+    await this.authorize(principal, permission);
     return (this.prisma as any).payerBankAccount.findFirst({
       where: {
         accountNoNormalized,
@@ -74,7 +85,8 @@ export class PrismaPayerBankAccountRepository implements PayerBankAccountReposit
     });
   }
 
-  async create(data: PayerBankAccountCreateData, audit: PayerBankAccountAuditContext) {
+  async create(principal: Principal, data: PayerBankAccountCreateData, audit: PayerBankAccountAuditContext) {
+    await this.authorize(principal, 'master-data:payer-banks:create');
     return this.prisma.$transaction(async (transaction) => {
       const row = await (transaction as any).payerBankAccount.create({ data });
       await transaction.auditLog.create({
@@ -84,7 +96,8 @@ export class PrismaPayerBankAccountRepository implements PayerBankAccountReposit
     });
   }
 
-  async update(id: string, data: PayerBankAccountUpdateData, audit: PayerBankAccountAuditContext) {
+  async update(principal: Principal, id: string, data: PayerBankAccountUpdateData, audit: PayerBankAccountAuditContext) {
+    await this.authorize(principal, 'master-data:payer-banks:update');
     return this.prisma.$transaction(async (transaction) => {
       const row = await (transaction as any).payerBankAccount.update({ where: { id }, data });
       await transaction.auditLog.create({
@@ -94,7 +107,8 @@ export class PrismaPayerBankAccountRepository implements PayerBankAccountReposit
     });
   }
 
-  async delete(id: string, audit: PayerBankAccountAuditContext) {
+  async delete(principal: Principal, id: string, audit: PayerBankAccountAuditContext) {
+    await this.authorize(principal, 'master-data:payer-banks:delete');
     return this.prisma.$transaction(async (transaction) => {
       const row = await (transaction as any).payerBankAccount.delete({ where: { id } });
       await transaction.auditLog.create({
@@ -102,6 +116,13 @@ export class PrismaPayerBankAccountRepository implements PayerBankAccountReposit
       });
       return row;
     });
+  }
+
+  private async authorize(principal: Principal, permission: PayerBankAccountPermission) {
+    const masks = principal.globalFieldMasks ?? await this.appRepository.getGlobalFieldMaskState(principal);
+    if (masks['payable-cost'] || (principal.role !== 'ADMIN' && !await this.appRepository.hasPermission(principal.role, permission))) {
+      throw new ForbiddenException('没有付款银行资料操作权限');
+    }
   }
 }
 
@@ -111,7 +132,8 @@ export class InMemoryPayerBankAccountRepository implements PayerBankAccountRepos
 
   private rows: PayerBankAccountRow[] = [];
 
-  async findMany(query: PayerBankAccountListQuery) {
+  async findMany(principal: Principal, query: PayerBankAccountListQuery) {
+    await this.authorize(principal, 'master-data:payer-banks:read');
     const keyword = query.keyword?.trim().toLowerCase();
     return [...this.rows]
       .filter((row) => !keyword || [
@@ -122,17 +144,20 @@ export class InMemoryPayerBankAccountRepository implements PayerBankAccountRepos
       .sort((left, right) => formatTimestamp(right.updatedAt).localeCompare(formatTimestamp(left.updatedAt)));
   }
 
-  async findById(id: string) {
+  async findById(principal: Principal, permission: PayerBankAccountPermission, id: string) {
+    await this.authorize(principal, permission);
     return this.rows.find((row) => row.id === id) ?? null;
   }
 
-  async findByNormalizedAccountNo(accountNoNormalized: string, excludeId?: string) {
+  async findByNormalizedAccountNo(principal: Principal, permission: PayerBankAccountPermission, accountNoNormalized: string, excludeId?: string) {
+    await this.authorize(principal, permission);
     return this.rows.find((row) =>
       row.accountNoNormalized === accountNoNormalized && row.id !== excludeId
     ) ?? null;
   }
 
-  async create(data: PayerBankAccountCreateData, audit: PayerBankAccountAuditContext) {
+  async create(principal: Principal, data: PayerBankAccountCreateData, audit: PayerBankAccountAuditContext) {
+    await this.authorize(principal, 'master-data:payer-banks:create');
     const timestamp = new Date().toISOString();
     const row: PayerBankAccountRow = {
       id: `payer-bank-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -145,8 +170,9 @@ export class InMemoryPayerBankAccountRepository implements PayerBankAccountRepos
     return row;
   }
 
-  async update(id: string, data: PayerBankAccountUpdateData, audit: PayerBankAccountAuditContext) {
-    const current = await this.findById(id);
+  async update(principal: Principal, id: string, data: PayerBankAccountUpdateData, audit: PayerBankAccountAuditContext) {
+    await this.authorize(principal, 'master-data:payer-banks:update');
+    const current = this.rows.find((row) => row.id === id) ?? null;
     if (!current) throw new Error('payer bank account row not found');
     const next = { ...current, ...data, updatedAt: new Date().toISOString() };
     this.rows = this.rows.map((row) => row.id === id ? next : row);
@@ -154,8 +180,9 @@ export class InMemoryPayerBankAccountRepository implements PayerBankAccountRepos
     return next;
   }
 
-  async delete(id: string, audit: PayerBankAccountAuditContext) {
-    const current = await this.findById(id);
+  async delete(principal: Principal, id: string, audit: PayerBankAccountAuditContext) {
+    await this.authorize(principal, 'master-data:payer-banks:delete');
+    const current = this.rows.find((row) => row.id === id) ?? null;
     if (!current) throw new Error('payer bank account row not found');
     this.rows = this.rows.filter((row) => row.id !== id);
     await this.writeAudit(audit, current);
@@ -175,6 +202,13 @@ export class InMemoryPayerBankAccountRepository implements PayerBankAccountRepos
         input.before,
         input.after?.(row)
       );
+    }
+  }
+
+  private async authorize(principal: Principal, permission: PayerBankAccountPermission) {
+    const masks = principal.globalFieldMasks ?? await this.appRepository.getGlobalFieldMaskState(principal);
+    if (masks['payable-cost'] || (principal.role !== 'ADMIN' && !await this.appRepository.hasPermission(principal.role, permission))) {
+      throw new ForbiddenException('没有付款银行资料操作权限');
     }
   }
 }

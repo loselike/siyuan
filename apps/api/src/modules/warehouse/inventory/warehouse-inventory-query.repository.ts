@@ -1,12 +1,17 @@
-import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, Optional } from '@nestjs/common';
 import type {
+  WarehouseInStockQuery,
   WarehouseInStockPageQuery,
   WarehouseInStockPageResponse,
+  WarehouseInStockResponse,
   WarehousePackageGroupSummary,
-  WarehousePackageSummary
+  WarehousePackageSummary,
+  WarehouseTodayQuery,
+  WarehouseTodayResponse
 } from '@siyuan/shared';
+import { PrismaRepository } from '../../prisma.repository.js';
 import { PrismaService } from '../../prisma.service.js';
-import { isAdministratorRole, isBusinessAgentRestrictedRole, type PermissionKey, type Principal } from '../../rbac.js';
+import { isWarehouseWideScopePrincipal, type PermissionKey, type Principal } from '../../rbac.js';
 import {
   mapWarehousePackagesWithConfirmedTally,
   resolveWarehouseTallyRecentCutoff,
@@ -14,6 +19,8 @@ import {
 } from '../warehouse-query.shared.js';
 import { resolveWarehouseTodayRange } from '../warehouse-domain.shared.js';
 import { queryWarehouseInStockAggregate } from './warehouse-in-stock-aggregate.query.js';
+import { getWarehouseInStock } from './warehouse-in-stock.query.js';
+import { getWarehouseInStockSummary } from './warehouse-in-stock-summary.query.js';
 
 export const WAREHOUSE_INVENTORY_QUERY_REPOSITORY = 'WAREHOUSE_INVENTORY_QUERY_REPOSITORY';
 export const WAREHOUSE_INVENTORY_QUERY_AUTHORIZER = 'WAREHOUSE_INVENTORY_QUERY_AUTHORIZER';
@@ -28,9 +35,23 @@ export interface MojiaWarehouseDuplicateQuery {
   remark?: string;
 }
 
+/**
+ * Compatibility bridge for read methods that are still hosted by the legacy
+ * repository. The controller can depend on the warehouse boundary while
+ * each method is migrated independently with characterization coverage.
+ */
+export interface WarehouseInventoryLegacyOperations {
+  getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery): Promise<WarehouseTodayResponse>;
+  getWarehouseInStock(principal: Principal, query: WarehouseInStockQuery): Promise<WarehouseInStockResponse>;
+  getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>>;
+}
+
 export interface WarehouseInventoryQueryRepository {
   getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]>;
+  getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery): Promise<WarehouseTodayResponse>;
+  getWarehouseInStock(principal: Principal, query: WarehouseInStockQuery): Promise<WarehouseInStockResponse>;
   getWarehouseInStockPage(principal: Principal, query: WarehouseInStockPageQuery): Promise<WarehouseInStockPageResponse>;
+  getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>>;
   getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]>;
   getWarehouseManualReceiptCustomers(principal: Principal): Promise<Array<{ code: string; name: string }>>;
   findDuplicateMojiaPackage(
@@ -44,7 +65,9 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(WAREHOUSE_INVENTORY_QUERY_AUTHORIZER)
-    private readonly authorizer: WarehouseInventoryQueryAuthorizer
+    private readonly authorizer: WarehouseInventoryQueryAuthorizer,
+    @Optional() @Inject(PrismaRepository)
+    private readonly legacyRepository?: WarehouseInventoryLegacyOperations
   ) {}
 
   async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
@@ -53,14 +76,11 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
       this.authorizer.hasPermission(principal.role, 'warehouse:in-stock:view')
     ]);
     if (!canToday && !canInStock) throw new ForbiddenException('没有仓库包裹查看权限');
-    const warehouseWideScope = isAdministratorRole(principal.role)
-      || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const warehouseWideScope = isWarehouseWideScopePrincipal(principal);
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
-    const businessCustomerScoped = !warehouseWideScope
-      && !isBusinessAgentRestrictedRole(principal.role)
-      && principal.dataScope !== 'SALES_OWN';
+    const businessCustomerScoped = !warehouseWideScope;
     const ownedCustomerCodes = businessCustomerScoped
       ? (await this.prisma.customer.findMany({
           where: { salesperson: { in: salespeople } },
@@ -78,18 +98,23 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     return mapWarehousePackagesWithConfirmedTally(this.prisma, rows);
   }
 
+  getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery) {
+    return this.requireLegacyRepository().getWarehouseTodayReceipts(principal, query);
+  }
+
+  getWarehouseInStock(principal: Principal, query: WarehouseInStockQuery) {
+    return getWarehouseInStock(this.prisma, this.authorizer, principal, query);
+  }
+
   async getWarehouseInStockPage(
     principal: Principal,
     query: WarehouseInStockPageQuery
   ): Promise<WarehouseInStockPageResponse> {
     const page = Math.max(1, Math.trunc(Number(query.page) || 1));
     const pageSize = Math.min(100, Math.max(1, Math.trunc(Number(query.pageSize) || 10)));
-    const warehouseWideScope = isAdministratorRole(principal.role)
-      || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const warehouseWideScope = isWarehouseWideScopePrincipal(principal);
     // 数据范围由服务端岗位/权限派生；客户端 dataScope 只用于展示偏好，不能扩权。
-    const businessCustomerScoped = !warehouseWideScope
-      && !isBusinessAgentRestrictedRole(principal.role)
-      && principal.dataScope !== 'SALES_OWN';
+    const businessCustomerScoped = !warehouseWideScope;
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
@@ -139,6 +164,22 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
         .map((row) => row.target)
         .filter(Boolean)));
       where.id = ids.length ? { in: ids } : { in: ['__none__'] };
+    }
+    if (query.status !== 'TALLIED_ARCHIVED') {
+      // 在仓可用池与录单选择保持同一归属口径：已绑定运单或被活动草稿
+      // 预占的包裹都不能继续作为可用库存展示。
+      where.shipmentId = null;
+      where.systemOrderNo = null;
+      const activeDrafts = await this.prisma.shipment.findMany({
+        where: { deletedAt: null },
+        select: { draftWarehousePackageIds: true }
+      });
+      const draftOccupiedPackageIds = Array.from(new Set(
+        activeDrafts.flatMap((shipment) => shipment.draftWarehousePackageIds ?? []).filter(Boolean)
+      ));
+      if (draftOccupiedPackageIds.length) {
+        where.NOT = { id: { in: draftOccupiedPackageIds } };
+      }
     }
 
     const [aggregate, pageRows, waitingDispatchTickets] = await Promise.all([
@@ -201,6 +242,10 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     return response;
   }
 
+  getWarehouseInStockSummary(principal: Principal) {
+    return getWarehouseInStockSummary(this.prisma, this.authorizer, principal);
+  }
+
   async getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]> {
     return summarizeWarehousePackageGroups(await this.getWarehousePackages(principal));
   }
@@ -244,6 +289,13 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
       orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
     });
     return row ? { combinedOrderNo: query.combinedOrderNo } : undefined;
+  }
+
+  private requireLegacyRepository(): WarehouseInventoryLegacyOperations {
+    if (!this.legacyRepository) {
+      throw new Error('仓库查询兼容仓储未配置');
+    }
+    return this.legacyRepository;
   }
 
 }

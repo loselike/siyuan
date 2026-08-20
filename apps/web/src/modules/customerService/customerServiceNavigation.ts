@@ -10,6 +10,7 @@ const customerServiceSectionKeys = [
   'arrivedPort',
   'delivering',
   'signed',
+  'sale',
   'problems',
   'afterSale'
 ];

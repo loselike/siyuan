@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 44
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase44`
 - 基线提交：`a311e40`
 - 47 开始基线：`whitelist-f79893be417ad4571504b903`；吸收期间其他发布会话推进到 `whitelist-ee794a2e6bfa3d45ef3b28ef`，已重新捕获并纳入最终候选。

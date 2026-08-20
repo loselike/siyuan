@@ -19,6 +19,12 @@ import { ManagedTable } from '../shared/ui';
 const { Text } = Typography;
 
 export type FinanceCatalogFilters = Record<FinanceCatalogCategory, { keyword: string; enabledOnly: boolean }>;
+export type FinanceCatalogCapabilities = Partial<Record<FinanceCatalogCategory, {
+  create?: boolean;
+  update?: boolean;
+  delete?: boolean;
+  reorder?: boolean;
+}>>;
 
 const financeCatalogTableScrollX: Record<'write' | 'read', Record<FinanceCatalogCategory, number>> = {
   write: {
@@ -48,6 +54,7 @@ type FinanceCatalogPageProps = {
   title?: string;
   categories?: FinanceCatalogCategory[];
   canWrite?: boolean;
+  capabilities?: FinanceCatalogCapabilities;
   onFilterChange: (category: FinanceCatalogCategory, patch: Partial<{ keyword: string; enabledOnly: boolean }>) => void;
   onRefresh: () => void | Promise<void>;
   onCreate: (category: FinanceCatalogCategory) => void;
@@ -89,6 +96,7 @@ export function FinanceCatalogPage({
   title = '财务资料库',
   categories = financeCatalogCategories,
   canWrite = true,
+  capabilities,
   onFilterChange,
   onRefresh,
   onCreate,
@@ -112,6 +120,11 @@ export function FinanceCatalogPage({
   }, [activeCategory, visibleCategories]);
 
   const createColumns = (category: FinanceCatalogCategory): ColumnsType<FinanceCatalogItemSummary> => {
+    const capability = capabilities?.[category];
+    const canUpdate = capability?.update ?? canWrite;
+    const canDelete = capability?.delete ?? canWrite;
+    const canReorder = capability?.reorder ?? canWrite;
+    const hasRowActions = canUpdate || canDelete;
     const actionColumnWidth = canWrite ? 178 : 82;
     const columns: ColumnsType<FinanceCatalogItemSummary> = [
       { title: '排序', dataIndex: 'sortOrder', width: 56, align: 'center' },
@@ -150,7 +163,7 @@ export function FinanceCatalogPage({
         align: 'center',
         render: (value: boolean) => <Tag color={value ? 'success' : 'default'}>{value ? '启用' : '停用'}</Tag>
       },
-      ...(canWrite ? [{
+      ...(canReorder ? [{
         title: '排序调整',
         key: 'sort',
         width: 124,
@@ -167,27 +180,31 @@ export function FinanceCatalogPage({
         width: actionColumnWidth,
         fixed: 'right',
         render: (_, row) => (
-          canWrite ? (
+          hasRowActions ? (
             <Space size={4} className="finance-catalog-inline-actions">
-              <Button size="small" onClick={() => onEdit(row)}>编辑</Button>
-              <Popconfirm
-                title={`确认${row.enabled ? '停用' : '启用'}该资料？`}
-                onConfirm={() => void onToggle(row)}
-                okText="确认"
-                cancelText="取消"
-              >
-                <Button size="small" danger={row.enabled}>{row.enabled ? '停用' : '启用'}</Button>
-              </Popconfirm>
-              <Popconfirm
-                title="确认删除该资料？"
-                description="删除后会从财务资料库和后续新增选择项中移除，历史单据已保存文本不受影响。"
-                onConfirm={() => void onDelete(row)}
-                okText="确认删除"
-                cancelText="取消"
-                okButtonProps={{ danger: true }}
-              >
-                <Button size="small" danger>删除</Button>
-              </Popconfirm>
+              {canUpdate ? <Button size="small" onClick={() => onEdit(row)}>编辑</Button> : null}
+              {canUpdate ? (
+                <Popconfirm
+                  title={`确认${row.enabled ? '停用' : '启用'}该资料？`}
+                  onConfirm={() => void onToggle(row)}
+                  okText="确认"
+                  cancelText="取消"
+                >
+                  <Button size="small" danger={row.enabled}>{row.enabled ? '停用' : '启用'}</Button>
+                </Popconfirm>
+              ) : null}
+              {canDelete ? (
+                <Popconfirm
+                  title="确认删除该资料？"
+                  description="删除后会从财务资料库和后续新增选择项中移除，历史单据已保存文本不受影响。"
+                  onConfirm={() => void onDelete(row)}
+                  okText="确认删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                >
+                  <Button size="small" danger>删除</Button>
+                </Popconfirm>
+              ) : null}
             </Space>
           ) : <Tag>只读</Tag>
         )
@@ -198,6 +215,8 @@ export function FinanceCatalogPage({
   };
 
   const rows = getCategoryRows(items, filters, activeCategory);
+  const activeCapability = capabilities?.[activeCategory];
+  const canCreateActiveCategory = activeCapability?.create ?? canWrite;
 
   return (
     <>
@@ -214,9 +233,9 @@ export function FinanceCatalogPage({
               value={activeCategory}
               onChange={(value) => setActiveCategory(value as FinanceCatalogCategory)}
             />
-            <Button type="primary" disabled={!canWrite} onClick={() => onCreate(activeCategory)}>
+            {canCreateActiveCategory ? <Button type="primary" onClick={() => onCreate(activeCategory)}>
               新增{financeCatalogCategoryLabels[activeCategory]}
-            </Button>
+            </Button> : null}
           </div>
           <Card
             className="finance-catalog-card"

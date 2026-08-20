@@ -1,5 +1,5 @@
 import type { Shipment, ShipmentReviewPackageSummary } from '@siyuan/shared';
-import { addRowsWorksheet, createWorkbook, downloadWorkbook, type SimpleWorkbook } from '../shared/excel';
+import { addRowsWorksheet, createWorkbook, downloadWorkbook, writeWorkbookBlob, type SimpleWorkbook } from '../shared/excel';
 import { formatBeijingDateTime } from '../shared/format';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 
@@ -71,6 +71,13 @@ export function buildShipmentPackageDetailWorkbook(
 export function shipmentPackageDetailExportFilename(shipment: Shipment) {
   const safeOrderNo = resolveShipmentOutboundOrderNo(shipment).replace(/[\\/:*?"<>|]/g, '-');
   return `${safeOrderNo || '运单'}-单件货物明细.xlsx`;
+}
+
+export async function createShipmentPackageDetailWorkbookBlob(
+  shipment: Shipment,
+  packages: ShipmentReviewPackageSummary[]
+) {
+  return writeWorkbookBlob(buildShipmentPackageDetailWorkbook(shipment, packages));
 }
 
 export async function downloadShipmentPackageDetailWorkbook(

@@ -1,45 +1,58 @@
-import { Inject, Injectable } from '@nestjs/common';
-import type { CarrierTaskSummary } from '@siyuan/shared';
+import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
+import {
+  toExternalTrackingShipmentSummary,
+  type CarrierTaskSummary,
+  type ExternalTrackingShipmentSummary,
+  type Shipment
+} from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { PrismaService } from '../../prisma.service.js';
-import { isSalesScopedRole, type Principal } from '../../rbac.js';
+import type { Principal } from '../../rbac.js';
 import { mapCarrierTask } from '../tracking.shared.js';
 
 export const TRACKING_QUERY_REPOSITORY = 'TRACKING_QUERY_REPOSITORY';
 
 export interface TrackingQueryRepository {
   getCarrierTasks(principal: Principal): Promise<CarrierTaskSummary[]>;
+  getExternalShipments(principal: Principal): Promise<ExternalTrackingShipmentSummary[]>;
+  getExternalShipmentDetail(principal: Principal, shipmentId: string): Promise<Shipment>;
 }
 
 @Injectable()
 export class PrismaTrackingQueryRepository implements TrackingQueryRepository {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(PrismaRepository) private readonly permissions: Pick<PrismaRepository, 'hasPermission'>
+    @Inject(PrismaRepository) private readonly permissions: Pick<PrismaRepository, 'hasPermission' | 'getTrackingShipments' | 'getTrackingShipmentDetail'>
   ) {}
 
   async getCarrierTasks(principal: Principal): Promise<CarrierTaskSummary[]> {
-    const canViewErrors = await this.permissions.hasPermission(principal.role, 'tracking:carrier-task:error-view');
-    const operatorCustomerScope = this.operatorCustomerScope(principal);
+    if (!await this.permissions.hasPermission(principal.role, 'tracking:carrier-task:view')) {
+      throw new ForbiddenException('没有承运商任务查看权限');
+    }
+    const visibleShipmentIds = (await this.permissions.getTrackingShipments(principal)).map((shipment) => shipment.id);
     const tasks = await this.prisma.carrierTask.findMany({
       where: {
-        shipment: {
-          deletedAt: null,
-          ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
-          ...(operatorCustomerScope ? { customer: { salesperson: { in: operatorCustomerScope } } } : {})
-        }
+        shipmentId: { in: visibleShipmentIds }
       },
       include: { shipment: { include: { customer: true } } },
       orderBy: { createdAt: 'desc' }
     });
     return tasks.map((task) => {
-      const mapped = mapCarrierTask(task);
-      return canViewErrors ? mapped : { ...mapped, lastError: undefined };
+      return mapCarrierTask(task);
     });
   }
 
-  private operatorCustomerScope(principal: Principal) {
-    if (principal.role === 'UG_MARKET' || !isSalesScopedRole(principal.role)) return undefined;
-    return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
+  async getExternalShipments(principal: Principal): Promise<ExternalTrackingShipmentSummary[]> {
+    if (!await this.permissions.hasPermission(principal.role, 'tracking:external:view')) {
+      throw new ForbiddenException('没有外部物流轨迹查看权限');
+    }
+    return (await this.permissions.getTrackingShipments(principal)).map(toExternalTrackingShipmentSummary);
+  }
+
+  async getExternalShipmentDetail(principal: Principal, shipmentId: string): Promise<Shipment> {
+    if (!await this.permissions.hasPermission(principal.role, 'tracking:external:detail')) {
+      throw new ForbiddenException('没有外部物流轨迹详情权限');
+    }
+    return this.permissions.getTrackingShipmentDetail(principal, shipmentId);
   }
 }

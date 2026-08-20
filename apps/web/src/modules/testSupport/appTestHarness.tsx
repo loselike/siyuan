@@ -606,10 +606,23 @@ const warehousePermissionDefinitions = [
 ].map(([code, label, section]) => ({ code, label, group: `仓库管理 / ${section}` }));
 const warehousePermissionCodes = warehousePermissionDefinitions.map((item) => item.code);
 const marketPermissionDefinitions = [
-  ['market:dashboard:view', '查看市场看板', '市场看板'], ['market:dashboard:pending-summary', '查看待排货概览', '市场看板'], ['market:dashboard:routed-summary', '查看已排货概览', '市场看板'], ['market:dashboard:weekly-summary', '查看本周排货概览', '市场看板'], ['market:dashboard:agent-stats-view', '查看代理统计', '市场看板'], ['market:dashboard:channel-mode-stats-view', '查看渠道统计', '市场看板'], ['market:dashboard:sensitive-summary-view', '查看敏感货统计', '市场看板'], ['market:dashboard:team-view', '查看团队数据', '市场看板'], ['market:dashboard:all-view', '查看全部数据', '市场看板'],
-  ['market:pending-routing:view', '查看待排货', '待排货'], ['market:pending-routing:detail', '查看待排货详情', '待排货'], ['market:pending-routing:assign', '分配代理渠道', '待排货'], ['market:pending-routing:save-draft', '保存排货资料', '待排货'], ['market:pending-routing:confirm', '确认排货', '待排货'], ['market:pending-routing:audit', '审核排货', '待排货'], ['market:pending-routing:update', '修改待排货', '待排货'], ['market:pending-routing:delete', '删除待排货', '待排货'], ['market:pending-routing:operation-log-view', '查看待排货操作日志', '待排货'], ['market:pending-routing:business-cost-view', '查看业务成本', '待排货'], ['market:pending-routing:payable-cost-view', '查看应付成本', '待排货'], ['market:pending-routing:agent-channel-view', '查看代理渠道', '待排货'], ['market:pending-routing:cost-field-view', '查看排货成本字段', '待排货'], ['market:pending-routing:column-setting', '保存待排货列设置', '待排货'],
-  ['market:routed:view', '查看已排货', '已排货'], ['market:routed:detail', '查看已排货详情', '已排货'], ['market:routed:update', '修改已排货', '已排货'], ['market:routed:reroute', '退回重排', '已排货'], ['market:routed:log-view', '查看已排货日志', '已排货'], ['market:routed:agent-cost-view', '查看代理成本', '已排货'], ['market:routed:cost-total-view', '查看成本合计', '已排货'], ['market:routed:agent-channel-view', '查看已排货代理渠道', '已排货'], ['market:routed:column-setting', '保存已排货列设置', '已排货'],
-  ['market:weekly-routing:view', '查看本周排货数据', '本周排货数据'], ['market:weekly-routing:detail', '查看本周排货详情', '本周排货数据'], ['market:weekly-routing:agent-stats-view', '查看本周代理统计', '本周排货数据'], ['market:weekly-routing:channel-mode-stats-view', '查看本周渠道统计', '本周排货数据'], ['market:weekly-routing:cost-view', '查看本周成本', '本周排货数据'], ['market:weekly-routing:reroute-stats-view', '查看退回重排统计', '本周排货数据'], ['market:weekly-routing:sensitive-stats-view', '查看本周敏感统计', '本周排货数据'], ['market:weekly-routing:export', '导出本周排货数据', '本周排货数据'], ['market:weekly-routing:column-setting', '保存本周排货列设置', '本周排货数据']
+  ['market:dashboard:view', '查看市场看板', '市场看板'],
+  ['market:pending-routing:view', '查看待排货', '待排货'],
+  ['market:pending-routing:route', '排货', '待排货'],
+  ['market:pending-routing:edit', '修改', '待排货'],
+  ['market:pending-routing:approve', '审核', '待排货'],
+  ['market:pending-routing:operation-log:view', '查看操作日志', '待排货'],
+  ['market:pending-routing:business-cost:view', '查看业务成本', '待排货'],
+  ['market:pending-routing:business-cost:create', '新增业务成本', '待排货'],
+  ['market:pending-routing:business-cost:edit', '修改业务成本', '待排货'],
+  ['market:pending-routing:business-cost:delete', '删除业务成本', '待排货'],
+  ['market:pending-routing:return-review', '退回重审', '待排货'],
+  ['market:routed:view', '查看', '已排货'],
+  ['market:routed:edit', '修改', '已排货'],
+  ['market:routed:reroute', '退回重排', '已排货'],
+  ['market:routed:routing-log:view', '查看排货日志', '已排货'],
+  ['market:routing-report:view', '查看', '排货数据'],
+  ['market:routing-report:export', '导出', '排货数据']
 ].map(([code, label, section]) => ({ code, label, group: `市场管理 / ${section}` }));
 const marketPermissionCodes = marketPermissionDefinitions.map((item) => item.code);
 const customerServicePermissionDefinitions = [
@@ -2923,6 +2936,35 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       .filter((row) => row.target === shipmentId && [`customer_service.${kind}_data.approved`, `customer_service.${kind}_data.reversed`].includes(row.action))
       .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0]?.action === `customer_service.${kind}_data.approved`;
     return jsonResponse(employeeShipments.filter((shipment) => shipment.status === 'OUTBOUNDED' && approved(shipment.id, 'business') && approved(shipment.id, 'agent')));
+  }
+
+  if (new URL(url, 'http://test.local').pathname === '/api/customer-service/shipments') {
+    return jsonResponse(employeeShipments);
+  }
+
+  if (new URL(url, 'http://test.local').pathname === '/api/warehouse/dispatch-shipments') {
+    return jsonResponse(employeeShipments.filter((shipment) => ['WAITING_DISPATCH', 'OUTBOUNDED'].includes(shipment.status)));
+  }
+
+  // The market workbench uses dedicated read endpoints. Keep the fixture
+  // contract aligned with production so the page receives an array of rows,
+  // rather than falling through to the generic `{}` response.
+  if (new URL(url, 'http://test.local').pathname === '/api/market/shipments') {
+    const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
+    return jsonResponse(token.includes('CUSTOMER') ? customerShipments : employeeShipments);
+  }
+
+  if (url.endsWith('/api/market/routing-options')) {
+    return jsonResponse({
+      agents: masterData.agents,
+      agentChannels: masterData.agentChannels,
+      channels: masterData.channels
+    });
+  }
+
+  if (url.endsWith('/api/market/routing-report/rows')) {
+    const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
+    return jsonResponse(token.includes('CUSTOMER') ? customerShipments : employeeShipments);
   }
 
   if (new URL(url, 'http://test.local').pathname === '/api/shipments') {

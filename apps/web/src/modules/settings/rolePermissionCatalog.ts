@@ -39,6 +39,42 @@ export function isGlobalFieldMaskPermission(code: string): boolean {
   return code.startsWith('system:global-mask:');
 }
 
+export function updateGlobalFieldMaskPermissions(
+  grantedPermissions: PermissionKey[],
+  code: PermissionKey,
+  checked: boolean
+): PermissionKey[] {
+  const next = new Set(grantedPermissions);
+  const agentDataCode = globalFieldMaskPermissionCode('agent-data');
+  const impliedAgentCodes = [
+    globalFieldMaskPermissionCode('agent-short-name'),
+    globalFieldMaskPermissionCode('agent-company-name'),
+    globalFieldMaskPermissionCode('agent-channel')
+  ];
+  if (checked) {
+    next.add(code);
+    if (code === agentDataCode) impliedAgentCodes.forEach((permission) => next.add(permission));
+  } else {
+    next.delete(code);
+    if (code === agentDataCode) impliedAgentCodes.forEach((permission) => next.delete(permission));
+    if (impliedAgentCodes.includes(code)) next.delete(agentDataCode);
+  }
+  return [...next];
+}
+
+/**
+ * Legacy market mask/block permissions are kept out of the assignable catalog.
+ * They may still exist in an old role snapshot during the migration window,
+ * but the settings UI must only expose the canonical positive permissions.
+ */
+export function isMarketPendingRoutingMaskPermission(code: string): boolean {
+  return code.startsWith('market:pending-routing:') && /(block|mask)/i.test(code);
+}
+
+export function isMarketRoutedMaskPermission(code: string): boolean {
+  return code.startsWith('market:routed:') && /(block|mask)/i.test(code);
+}
+
 export type OrderEntryPermissionKey = 'edit' | 'business-cost' | 'payable-fee';
 
 export const orderEntryPermissionControls: Array<{
@@ -63,6 +99,34 @@ export const orderEntryPermissionControls: Array<{
   }
 ];
 
+export const orderFeePermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看费用', code: 'business:order-fee:view' },
+  { label: '新增费用', code: 'business:order-fee:create' },
+  { label: '修改费用', code: 'business:order-fee:update' },
+  { label: '删除费用', code: 'business:order-fee:delete' },
+  { label: '锁定费用', code: 'business:order-fee:lock' },
+  { label: '解锁费用', code: 'business:order-fee:unlock' },
+  { label: '查看利润', code: 'business:order-fee:profit-view' }
+];
+
+export function updateOrderFeePermission(
+  grantedPermissions: PermissionKey[],
+  code: PermissionKey,
+  checked: boolean
+): PermissionKey[] {
+  const next = new Set(grantedPermissions);
+  if (checked) {
+    next.add(code);
+    next.add('business:order-fee:view');
+  } else {
+    next.delete(code);
+    if (code === 'business:order-fee:view') {
+      orderFeePermissionControls.forEach((control) => next.delete(control.code));
+    }
+  }
+  return [...next];
+}
+
 export function isOrderEntryPermission(code: string): boolean {
   return orderEntryPermissionControls.some((control) => control.code === code);
 }
@@ -76,12 +140,12 @@ export const customerServiceTransferPermissionControls: Array<{ label: string; c
   { label: '查看追踪网站', code: 'customer-service:transfer:tracking-website-view' },
   { label: '上传面单', code: 'customer-service:transfer:label-upload' },
   { label: '查看面单', code: 'customer-service:transfer:label-view' },
+  { label: '发起代理变更', code: 'customer-service:transfer:request-agent-change' },
   { label: '查看出库时间', code: 'customer-service:transfer:view-outbound-time' },
   { label: '查看代理信息', code: 'customer-service:transfer:view-agent' },
   { label: '查看代理数据', code: 'customer-service:transfer:view-agent-data' },
   { label: '查看敏感货物属性', code: 'customer-service:transfer:view-sensitive' },
   { label: '查看全部授权订单', code: 'customer-service:transfer:view-all' },
-  { label: '保存列设置', code: 'customer-service:transfer:column-setting' }
 ];
 
 export const customerServicePendingRoutingPermissionControls: Array<{ label: string; code: PermissionKey }> = [
@@ -89,7 +153,6 @@ export const customerServicePendingRoutingPermissionControls: Array<{ label: str
   { label: '查看费用明细', code: 'customer-service:pending-routing:fee-detail-view' },
   { label: '查看代理信息', code: 'customer-service:pending-routing:agent-view' },
   { label: '创建问题件', code: 'customer-service:pending-routing:problem-create' },
-  { label: '保存列设置', code: 'customer-service:pending-routing:column-setting' }
 ];
 
 export const customerServiceDataConfirmPermissionControls: Array<{ label: string; code: PermissionKey }> = [
@@ -102,75 +165,23 @@ export const customerServiceDataConfirmPermissionControls: Array<{ label: string
   { label: '审核代理数据', code: 'customer-service:data-confirm:agent-approve' },
   { label: '全部审核', code: 'customer-service:data-confirm:approve-all' },
   { label: '反审核', code: 'customer-service:data-confirm:reverse' },
-  { label: '保存列设置', code: 'customer-service:data-confirm:column-setting' }
 ];
 
-export const customerServiceTransferFillMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽填写转单号', code: 'customer-service:transfer:fill-block' }
-];
-
-export function isCustomerServiceTransferFillMaskPermission(code: string): boolean {
-  return customerServiceTransferFillMaskControls.some((control) => control.code === code);
-}
-
-export const customerServicePendingRoutingMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽查看费用', code: 'customer-service:pending-routing:fee-detail-block' },
-  { label: '屏蔽只读', code: 'customer-service:pending-routing:readonly-block' }
-];
-
-export function isCustomerServicePendingRoutingMaskPermission(code: string): boolean {
-  return customerServicePendingRoutingMaskControls.some((control) => control.code === code);
-}
-
-export const customerServiceDataConfirmMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽业务审核', code: 'customer-service:data-confirm:business-approve-block' },
-  { label: '屏蔽业务修改', code: 'customer-service:data-confirm:business-update-block' },
-  { label: '屏蔽代理修改', code: 'customer-service:data-confirm:agent-update-block' },
-  { label: '屏蔽代理审核', code: 'customer-service:data-confirm:agent-approve-block' }
-];
-
-export function isCustomerServiceDataConfirmMaskPermission(code: string): boolean {
-  return customerServiceDataConfirmMaskControls.some((control) => control.code === code);
-}
-
-export const marketPendingRoutingMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽排货', code: 'market:pending-routing:route-block' },
-  { label: '屏蔽修改', code: 'market:pending-routing:update-block' },
-  { label: '屏蔽审核', code: 'market:pending-routing:audit-block' },
-  { label: '屏蔽操作日志', code: 'market:pending-routing:operation-log-block' },
-  { label: '屏蔽业务成本修改', code: 'market:pending-routing:business-cost-update-block' },
-  { label: '屏蔽业务成本新增', code: 'market:pending-routing:business-cost-create-block' },
-  { label: '屏蔽业务成本删除', code: 'market:pending-routing:business-cost-delete-block' },
-  { label: '屏蔽退回重审', code: 'market:pending-routing:reroute-block' }
-];
-
-export function isMarketPendingRoutingMaskPermission(code: string): boolean {
-  return marketPendingRoutingMaskControls.some((control) => control.code === code);
-}
-
-export const marketRoutedMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽退回重排', code: 'market:routed:reroute-block' },
-  { label: '屏蔽修改', code: 'market:routed:update-block' },
-  { label: '屏蔽排货日志', code: 'market:routed:log-block' }
-];
-
-export function isMarketRoutedMaskPermission(code: string): boolean {
-  return marketRoutedMaskControls.some((control) => control.code === code);
+/** Returns the parent module-view permission for an assignable customer-service action. */
+export function customerServiceViewPermissionFor(code: PermissionKey): PermissionKey | undefined {
+  if (!code.startsWith('customer-service:') || code.endsWith('-block')) return undefined;
+  // 售后入口是受限子集，不能因为勾选售后查看而打开完整状态池。
+  if (
+    code === 'customer-service:problem:after-sale-view'
+    || code === 'customer-service:signed:after-sale-view'
+  ) return undefined;
+  if (
+    code === 'customer-service:signed:after-sale-assist'
+    || code === 'customer-service:signed:after-sale-close'
+  ) return 'customer-service:signed:after-sale-view';
+  const separator = code.lastIndexOf(':');
+  if (separator <= 'customer-service:'.length || code.slice(separator + 1) === 'view') return undefined;
+  return `${code.slice(0, separator)}:view` as PermissionKey;
 }
 
 export function lineShipmentStageEditBlockPermissionCode(stage: LineShipmentEditStageKey): PermissionKey {
@@ -301,7 +312,7 @@ export const permissionWorkspaceCatalog: PermissionWorkspaceDefinition[] = [
       { label: '市场看板' },
       { label: '待排货' },
       { label: '已排货' },
-      { label: '排货数据', permissionGroup: '本周排货数据' }
+      { label: '排货数据' }
     ]
   },
   {
@@ -329,7 +340,7 @@ export const permissionWorkspaceCatalog: PermissionWorkspaceDefinition[] = [
     key: 'finance',
     label: '财务管理',
     // 付款申请与待付款共用 finance:pending-payment:* 权限，统一成一个入口开关。
-    groups: ['财务看板', '应收审核', '业务成本审核', '市场应付审核', '待付款', '已付款', '水单到账查询', '水单匹配', '代理账单'].map((label) => ({ label }))
+    groups: ['财务看板', '应收审核', '业务成本审核', '市场应付审核', '单票费用', '待付款', '已付款', '水单到账查询', '水单匹配', '代理账单'].map((label) => ({ label }))
   },
   {
     key: 'miscFees',
@@ -355,7 +366,7 @@ export const permissionWorkspaceCatalog: PermissionWorkspaceDefinition[] = [
   {
     key: 'system',
     label: '系统管理',
-    groups: ['用户组', '用户名', '站点', '操作日志', '角色权限分配', '权限安全区', 'AI 接口安全', '系统基础配置'].map((label) => ({ label }))
+    groups: ['用户组', '用户名', '站点', '操作日志', '角色权限分配', '权限安全区', 'AI 接口安全', '公告管理', '通知运行', '系统基础配置'].map((label) => ({ label }))
   }
 ];
 
@@ -380,9 +391,6 @@ export function getWorkspacePermissionGroups(
       .filter((permission) => !permission.code.includes('-block'))
       .filter((permission) => !isMarketPendingRoutingMaskPermission(permission.code))
       .filter((permission) => !isMarketRoutedMaskPermission(permission.code))
-      .filter((permission) => !isCustomerServicePendingRoutingMaskPermission(permission.code))
-      .filter((permission) => !isCustomerServiceDataConfirmMaskPermission(permission.code))
-      .filter((permission) => !isCustomerServiceTransferFillMaskPermission(permission.code))
       .filter((permission, index, all) => all.findIndex((item) => item.code === permission.code) === index);
     return permissions.length ? [[canonicalGroup, permissions] as [string, PermissionDefinition[]]] : [];
   });

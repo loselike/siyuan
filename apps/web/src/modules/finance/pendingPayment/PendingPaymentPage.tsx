@@ -11,13 +11,14 @@ import type {
   PaymentApplicationCreateInput,
   PaymentVoucherInput
 } from '@siyuan/shared';
-import type { ApiClient, PermissionKey } from '../../../apiClient';
+import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { downloadCsv } from '../exportCsv';
 import { VoucherImageInput, type VoucherImageValue } from '../VoucherImageInput';
 import { formatBeijingDateTime } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
-import { AppDatePicker, isAppDateRangeInvalid, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, type ManagedTableColumns } from '../../shared/ui';
+import { AppDatePicker, isAppDateRangeInvalid, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, renderAuthorizedAction, type ManagedTableColumns } from '../../shared/ui';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
+import { getGlobalFieldMaskVisibility } from '../../shared/globalFieldMask';
 
 const { Text } = Typography;
 const bankAccountOrdinals = ['一', '二', '三'];
@@ -32,6 +33,7 @@ type PaymentApplicationFormValues = PaymentApplicationCreateInput & PayeeBankAcc
 type PendingPaymentPageProps = {
   apiClient: ApiClient;
   permissions: PermissionKey[];
+  role?: RoleKey | string;
   renderShipmentOrderNoLink: (systemOrderNo?: string) => ReactNode;
   initialQuery?: PendingPaymentListQuery;
 };
@@ -99,7 +101,7 @@ function renderPaymentStatus(status: PendingPaymentSummary['status']) {
   return <Tag className="finance-payment-status-tag" color={view.color}>{view.label}</Tag>;
 }
 
-export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrderNoLink, initialQuery }: PendingPaymentPageProps) {
+export function PendingPaymentPage({ apiClient, permissions, role, renderShipmentOrderNoLink, initialQuery }: PendingPaymentPageProps) {
   const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PendingPaymentFormValues>();
   const [applicationForm] = Form.useForm<PaymentApplicationFormValues>();
@@ -115,12 +117,21 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
   const [bankOptionsLoading, setBankOptionsLoading] = useState(false);
   const [manualBankMode, setManualBankMode] = useState(false);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
-  const canCreatePaymentApplication = hasPermission(permissions, 'finance:pending-payment:create');
-  const canCancelPaymentApplication = hasPermission(permissions, 'finance:pending-payment:cancel');
-  const canSelectBank = hasPermission(permissions, 'finance:pending-payment:bank-select');
-  const canMaintainBank = hasPermission(permissions, 'finance:pending-payment:bank-manage');
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
+  const canUsePayableAgentData = fieldVisibility.showAgentData
+    && fieldVisibility.showAgentShortName
+    && fieldVisibility.showAgentCompanyName
+    && fieldVisibility.showAgentChannel;
+  const canViewBankData = canUsePayableAgentData && fieldVisibility.showPayableCost;
+  const canCreatePaymentApplication = canUsePayableAgentData && fieldVisibility.showPayableCost && hasPermission(permissions, 'finance:pending-payment:create');
+  const canCancelPaymentApplication = fieldVisibility.showPayableStatus && hasPermission(permissions, 'finance:pending-payment:cancel');
+  const canSelectBank = canViewBankData && hasPermission(permissions, 'finance:pending-payment:bank-select');
+  const canMaintainBank = canViewBankData && hasPermission(permissions, 'finance:pending-payment:bank-manage');
+  const canViewBank = canSelectBank || canMaintainBank;
   const canUploadAttachment = hasPermission(permissions, 'finance:pending-payment:bill-voucher-upload');
-  const canExport = hasPermission(permissions, 'finance:pending-payment:export');
+  const canExport = fieldVisibility.showPayableCost
+    && fieldVisibility.showPayableStatus
+    && hasPermission(permissions, 'finance:pending-payment:export');
 
   const loadRows = async (nextQuery = query) => {
     setLoading(true);
@@ -185,6 +196,10 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
   };
 
   const openApplication = async (rows = selectedRows) => {
+    if (!canCreatePaymentApplication || !canSelectBank) {
+      message.warning('当前账号无权查看付款申请字段');
+      return;
+    }
     if (!rows.length) {
       message.warning('请先勾选待付款记录');
       return;
@@ -356,15 +371,15 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     const exported = await apiClient.exportPaymentApplications({ ids: selectedIds.length ? selectedIds : undefined, query });
     downloadCsv('pending-payments.csv', [
       { key: 'date', label: '日期' },
-      { key: 'agentShortName', label: agentFieldLabels.shortName },
+      ...(fieldVisibility.showAgentShortName ? [{ key: 'agentShortName', label: agentFieldLabels.shortName }] : []),
       { key: 'salesperson', label: '业务员' },
       { key: 'customerCode', label: '客户编号' },
       { key: 'outboundOrderNo', label: '出货单号' },
       { key: 'feeName', label: '应付费用' },
       { key: 'currency', label: '币种' },
-      { key: 'amount', label: '合计金额' },
+      ...(fieldVisibility.showPayableCost ? [{ key: 'amount', label: '合计金额' }] : []),
       { key: 'remark', label: '备注' },
-      { key: 'status', label: '状态' },
+      ...(fieldVisibility.showPayableStatus ? [{ key: 'status', label: '状态' }] : []),
       { key: 'paymentApplicationNo', label: '付款申请编号' }
     ], exported.rows.map((row) => ({ ...row, date: row.date ? formatBeijingDateTime(row.date) : '-' })) as unknown as Array<Record<string, unknown>>);
     message.success(`付款申请导出已生成：${exported.rows.length} 条`);
@@ -372,16 +387,16 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
 
   const columns: ManagedTableColumns<PendingPaymentSummary> = [
     { title: '日期', dataIndex: 'date', width: 170, sorter: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
-    { title: agentFieldLabels.shortName, dataIndex: 'agentShortName', width: 130, render: (value?: string) => value ?? '-' },
+    ...(fieldVisibility.showAgentShortName ? [{ title: agentFieldLabels.shortName, dataIndex: 'agentShortName', width: 130, render: (value?: string) => value ?? '-' }] : []),
     { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value ?? '-' },
     { title: '客户编号', dataIndex: 'customerCode', width: 110 },
     { title: '出货单号', dataIndex: 'systemOrderNo', width: 190, render: (_: string | undefined, row) => renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)) },
     { title: '应付费用', dataIndex: 'feeName', width: 140 },
     { title: '币种', dataIndex: 'currency', width: 90 },
-    { title: '合计金额', dataIndex: 'amount', width: 130, align: 'right', sorter: true, render: (value: number) => <Text strong className="finance-payment-amount">{formatMoney(value)}</Text> },
+    ...(fieldVisibility.showPayableCost ? [{ title: '合计金额', dataIndex: 'amount', width: 130, align: 'right' as const, sorter: true, render: (value: number) => <Text strong className="finance-payment-amount">{formatMoney(value)}</Text> }] : []),
     { title: '备注', dataIndex: 'remark', width: 160, ellipsis: true, render: (value?: string) => value ?? '-' },
-    { title: '收款方银行信息', dataIndex: 'bankAccount', width: 260, render: (value?: PayeeBankAccountSummary) => value ? `${value.accountName} / ${value.bankName} / ${value.bankAccountNo}` : '待选择' },
-    { title: '状态', dataIndex: 'status', width: 120, render: renderPaymentStatus },
+    ...(canViewBank ? [{ title: '收款方银行信息', dataIndex: 'bankAccount', width: 260, render: (value?: PayeeBankAccountSummary) => value ? `${value.accountName} / ${value.bankName} / ${value.bankAccountNo}` : '待选择' }] : []),
+    ...(fieldVisibility.showPayableStatus ? [{ title: '状态', dataIndex: 'status', width: 120, render: renderPaymentStatus }] : []),
     {
       title: '操作',
       key: 'action',
@@ -418,18 +433,22 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
             { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
             { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
             { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)), title: resolveShipmentOutboundOrderNo(row) },
-            { key: 'agentShortName', label: agentFieldLabels.shortName, value: row.agentShortName || '-' },
+            fieldVisibility.showAgentShortName ? { key: 'agentShortName', label: agentFieldLabels.shortName, value: row.agentShortName || '-' } : null,
             { key: 'feeName', label: '应付费用', value: row.feeName || '-', title: row.feeName, wrap: true },
             row.remark ? { key: 'remark', label: '备注', value: row.remark, title: row.remark, wrap: true } : null,
-            { key: 'amount', label: '合计金额', value: <Text strong className="finance-payment-amount">{row.currency} {formatMoney(row.amount)}</Text> },
-            { key: 'bankAccount', label: '收款银行', value: row.bankAccount ? `${row.bankAccount.accountName} / ${row.bankAccount.bankName} / ${row.bankAccount.bankAccountNo}` : '待选择', title: row.bankAccount?.bankAccountNo, wrap: true },
-            { key: 'status', label: '状态', value: renderPaymentStatus(row.status) }
+            fieldVisibility.showPayableCost ? { key: 'amount', label: '合计金额', value: <Text strong className="finance-payment-amount">{row.currency} {formatMoney(row.amount)}</Text> } : null,
+            canViewBank ? { key: 'bankAccount', label: '收款银行', value: row.bankAccount ? `${row.bankAccount.accountName} / ${row.bankAccount.bankName} / ${row.bankAccount.bankAccountNo}` : '待选择', title: row.bankAccount?.bankAccountNo, wrap: true } : null,
+            fieldVisibility.showPayableStatus ? { key: 'status', label: '状态', value: renderPaymentStatus(row.status) } : null
           ]}
         />
       )
     },
     { ...columns[columns.length - 1], key: 'action', width: 110, fixed: 'right' }
   ];
+
+  if (!fieldVisibility.showPayableCost || !fieldVisibility.showPayableStatus) {
+    return <Alert type="warning" showIcon message="当前账号无权查看该页面" />;
+  }
 
   return (
     <Card
@@ -438,7 +457,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
       extra={(
         <Space>
           <Button icon={<RefreshCw size={15} />} onClick={() => void loadRows()}>刷新</Button>
-          <Button icon={<Download size={15} />} disabled={!canExport} onClick={() => void exportRows()}>导出</Button>
+          {renderAuthorizedAction(canExport, <Button icon={<Download size={15} />} onClick={() => void exportRows()}>导出</Button>)}
         </Space>
       )}
     >
@@ -450,11 +469,11 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
         onFinish={() => void applyFilters()}
       >
         <Row gutter={[10, 10]} className="finance-filter-bar finance-audit-filter-grid finance-pending-filter-primary" role="group" aria-label="待付款筛选条件">
-          <Col xs={24} md={8} xl={4}><Form.Item name="agent" label={agentFieldLabels.shortName}><Input allowClear placeholder="输入代理简称" /></Form.Item></Col>
+          {fieldVisibility.showAgentShortName ? <Col xs={24} md={8} xl={4}><Form.Item name="agent" label={agentFieldLabels.shortName}><Input allowClear placeholder="输入代理简称" /></Form.Item></Col> : null}
           <Col xs={24} md={8} xl={4}><Form.Item name="salesperson" label="业务员"><Input allowClear placeholder="输入业务员" /></Form.Item></Col>
           <Col xs={24} md={8} xl={4}><Form.Item name="customerCode" label="客户编号"><Input allowClear placeholder="输入客户编号" /></Form.Item></Col>
           <Col xs={24} md={8} xl={4}><Form.Item name="systemOrderNo" label="出货单号"><Input allowClear placeholder="输入出货单号" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={4}><Form.Item name="status" label="状态"><Select placeholder="全部状态" options={[{ label: '全部', value: 'ALL' }, { label: '待付款', value: 'PENDING' }, { label: '资料已完善', value: 'READY' }, { label: '已进入待支付', value: 'APPLIED' }, { label: '已失效', value: 'INVALIDATED' }]} /></Form.Item></Col>
+          {fieldVisibility.showPayableStatus ? <Col xs={24} md={8} xl={4}><Form.Item name="status" label="状态"><Select placeholder="全部状态" options={[{ label: '全部', value: 'ALL' }, { label: '待付款', value: 'PENDING' }, { label: '资料已完善', value: 'READY' }, { label: '已进入待支付', value: 'APPLIED' }, { label: '已失效', value: 'INVALIDATED' }]} /></Form.Item></Col> : null}
           <Col xs={24} md={16} xl={4} className="finance-audit-filter-actions finance-pending-filter-actions">
             <Space size={8} wrap>
               <Button type="primary" htmlType="submit" icon={<Search size={15} />}>查询</Button>
@@ -473,9 +492,9 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
           <Row gutter={[10, 10]} className="finance-audit-filter-grid finance-audit-filter-advanced finance-pending-filter-advanced">
             <Col xs={24} md={8} xl={4}><Form.Item name="feeName" label="应付费用"><Input allowClear placeholder="输入费用名称" /></Form.Item></Col>
             <Col xs={24} md={8} xl={4}><Form.Item name="currency" label="币种"><Select placeholder="全部币种" options={[{ label: '全部', value: 'ALL' }, { label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
-            <Col xs={24} md={8} xl={4}><Form.Item name="amount" label="合计金额"><InputNumber className="full-width" min={0} placeholder="输入金额" /></Form.Item></Col>
+            {fieldVisibility.showPayableCost ? <Col xs={24} md={8} xl={4}><Form.Item name="amount" label="合计金额"><InputNumber className="full-width" min={0} placeholder="输入金额" /></Form.Item></Col> : null}
             <Col xs={24} md={8} xl={4}><Form.Item name="payeeName" label="收款方名称"><Input allowClear placeholder="输入收款方名称" /></Form.Item></Col>
-            <Col xs={24} md={8} xl={4}><Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear placeholder="输入收款账号" /></Form.Item></Col>
+            {canViewBank ? <Col xs={24} md={8} xl={4}><Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear placeholder="输入收款账号" /></Form.Item></Col> : null}
             <Col xs={24} md={8} xl={4}><Form.Item name="remark" label="备注"><Input allowClear placeholder="输入备注关键词" /></Form.Item></Col>
             <Col xs={24} md={8} xl={4}><Form.Item name="applicationDateFrom" label="申请付款日期起"><AppDatePicker /></Form.Item></Col>
             <Col xs={24} md={8} xl={4}><Form.Item name="applicationDateTo" label="申请付款日期止"><AppDatePicker /></Form.Item></Col>
@@ -490,11 +509,11 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
               批量发起付款
             </Button>
           ) : null}
-          <Text type="secondary">已选 {selectedRows.length} 条</Text>
-          {hasMultipleApplicationGroups ? <Text type="warning">当前包含多个付款组，请分组提交</Text> : null}
+          {canCreatePaymentApplication ? <Text type="secondary">已选 {selectedRows.length} 条</Text> : null}
+          {canCreatePaymentApplication && hasMultipleApplicationGroups ? <Text type="warning">当前包含多个付款组，请分组提交</Text> : null}
         </Space>
         <Space wrap className="finance-payment-command-summary">
-          {selectedAmountByCurrency.map((item) => <Tag color="blue" key={`selected-${item.currency}`}>已选 {item.currency}：{formatMoney(item.amount)}</Tag>)}
+          {fieldVisibility.showPayableCost ? selectedAmountByCurrency.map((item) => <Tag color="blue" key={`selected-${item.currency}`}>已选 {item.currency}：{formatMoney(item.amount)}</Tag>) : null}
         </Space>
       </div>
 
@@ -530,7 +549,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
         size="small"
         loading={loading}
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
-        rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.status === 'APPLIED' || row.status === 'INVALIDATED' || row.status === 'PAID' }) }}
+        rowSelection={canCreatePaymentApplication ? { selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.status === 'APPLIED' || row.status === 'INVALIDATED' || row.status === 'PAID' }) } : undefined}
         rowClassName={(row) => selectedIds.includes(row.id) ? 'finance-payment-row-selected' : ''}
         dataSource={response.rows}
         onChange={(pagination, _, sorter) => {
@@ -570,11 +589,11 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
           <Flex className="finance-payment-application-footer" align="center" justify="space-between" gap={12}>
             <Text>
               已选 <Text strong>{selectedRows.length}</Text> 项
-              {selectedAmountByCurrency.map((item) => (
+              {fieldVisibility.showPayableCost ? selectedAmountByCurrency.map((item) => (
                 <Text key={`modal-total-${item.currency}`}>
                   {' '}· {item.currency} <Text strong className="finance-payment-application-footer-amount">{formatMoney(item.amount)}</Text>
                 </Text>
-              ))}
+              )) : null}
             </Text>
             <Space>
               <Button disabled={applicationSubmitting} onClick={closeApplication}>取消</Button>
@@ -585,7 +604,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
       >
         <Space direction="vertical" className="full-width" size={12}>
           {hasMultipleApplicationGroups ? <Alert type="warning" showIcon message="当前包含多个付款组，请关闭后按同一收款方、银行账号和币种分开提交。" /> : null}
-          <section className="finance-payment-modal-section">
+          {canViewBankData ? <section className="finance-payment-modal-section">
             <div className="finance-payment-section-title">付款摘要</div>
             <ManagedTable
               className="finance-work-table finance-embedded-table finance-payment-group-table"
@@ -594,15 +613,15 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
               pagination={false}
               dataSource={groupedApplications}
               columns={[
-                { title: agentFieldLabels.shortName, dataIndex: 'agentShortName' },
+                ...(fieldVisibility.showAgentShortName ? [{ title: agentFieldLabels.shortName, dataIndex: 'agentShortName' }] : []),
                 { title: '币种', dataIndex: 'currency', width: 90 },
                 { title: '明细数', dataIndex: 'rows', width: 90, render: (value: PendingPaymentSummary[]) => value.length },
-                { title: '合计金额', dataIndex: 'amount', width: 160, align: 'right', render: (value: number) => <Text strong className="finance-payment-application-summary-amount">{formatMoney(value)}</Text> }
+                ...(fieldVisibility.showPayableCost ? [{ title: '合计金额', dataIndex: 'amount', width: 160, align: 'right' as const, render: (value: number) => <Text strong className="finance-payment-application-summary-amount">{formatMoney(value)}</Text> }] : [])
               ]}
             />
-          </section>
+          </section> : null}
           <Form form={applicationForm} layout="vertical">
-            <section className="finance-payment-modal-section">
+            {canViewBank ? <section className="finance-payment-modal-section">
               <div className="finance-payment-section-heading">
                 <div>
                   <div className="finance-payment-section-title">收款银行信息</div>
@@ -629,7 +648,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={4}>
-                  <Button className="full-width" disabled={!canMaintainBank} onClick={startManualBankEntry}>新增填写</Button>
+                  {canMaintainBank ? <Button className="full-width" onClick={startManualBankEntry}>新增填写</Button> : null}
                 </Col>
               </Row>
               <div className="finance-payment-bank-divider"><span>银行资料</span></div>
@@ -647,21 +666,20 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
                   {manualBankMode ? <Text type="secondary" className="finance-payment-bank-save-location">保存位置：基础资料库 &gt; 代理资料；已有三个账户时不会覆盖原账户</Text> : null}
                 </Col>
               </Row>
-            </section>
+            </section> : null}
             <Row gutter={12} className="finance-payment-support-row">
-              <Col xs={24} md={12}>
+              {canUploadAttachment ? <Col xs={24} md={12}>
                 <section className="finance-payment-modal-section finance-payment-support-section">
                   <div className="finance-payment-section-title">供应商账单截图</div>
                   <Form.Item name="voucherImage">
                     <VoucherImageInput
                       apiClient={apiClient}
-                      disabled={!canUploadAttachment}
                       onFileChange={setApplicationVoucherFile}
                     />
                   </Form.Item>
                 </section>
-              </Col>
-              <Col xs={24} md={12}>
+              </Col> : null}
+              <Col xs={24} md={canUploadAttachment ? 12 : 24}>
                 <section className="finance-payment-modal-section finance-payment-support-section">
                   <div className="finance-payment-section-title">备注</div>
                   <Form.Item name="remark"><Input.TextArea rows={3} placeholder="填写付款说明（选填）" /></Form.Item>

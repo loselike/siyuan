@@ -9,6 +9,7 @@ import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, MetricCar
 import { formatBeijingDateTime } from '../shared/format';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from '../shared/shipmentStageDwell';
+import { getGlobalFieldMaskVisibility } from '../shared/globalFieldMask';
 import { ProblemTicketCreateModal } from '../customerService/ProblemTicketCreateModal';
 
 const { Title } = Typography;
@@ -173,32 +174,8 @@ const linePoolLedgerColumnSettings = {
 };
 const linePoolTableLocale = { emptyText: '暂无符合条件的运单' };
 
-type OperationsFieldMaskKey = 'agent-short-name' | 'agent-company-name' | 'agent-channel' | 'agent-data' | 'payable-cost' | 'payable-status';
-
-function operationsFieldMaskPermissionCode(key: OperationsFieldMaskKey): string {
-  return `system:global-mask:${key}`;
-}
-
 export function getOperationsFieldVisibility(role: RoleKey, permissions: readonly string[]) {
-  if (role === 'ADMIN') {
-    return {
-      showAgentShortName: true,
-      showAgentCompanyName: true,
-      showAgentChannel: true,
-      showPayableCost: true,
-      showPayableStatus: true
-    };
-  }
-  const permissionSet = new Set(permissions);
-  const isMasked = (key: OperationsFieldMaskKey) => permissionSet.has(operationsFieldMaskPermissionCode(key));
-  const agentDataMasked = isMasked('agent-data');
-  return {
-    showAgentShortName: !agentDataMasked && !isMasked('agent-short-name'),
-    showAgentCompanyName: !agentDataMasked && !isMasked('agent-company-name'),
-    showAgentChannel: !agentDataMasked && !isMasked('agent-channel'),
-    showPayableCost: !isMasked('payable-cost'),
-    showPayableStatus: !isMasked('payable-status')
-  };
+  return getGlobalFieldMaskVisibility(role, permissions);
 }
 
 function getLinePoolRowKey(row: LineShipmentPoolRow) {
@@ -379,6 +356,42 @@ export function OperationsPage({
   const canViewImportQuality = can('operations:import-quality:view');
   const canViewSensitive = can('operations:line-shipment:process') || can('operations:product-map:cost-sensitive-view');
   const fieldVisibility = useMemo(() => getOperationsFieldVisibility(role, permissions), [permissions, role]);
+  const visibleLinePoolDetailColumnOrder = useMemo(
+    () => defaultLinePoolDetailColumnOrder.filter((key) =>
+      (key !== 'agentName' || fieldVisibility.showAgentCompanyName)
+      && (key !== 'agentShortName' || fieldVisibility.showAgentShortName)
+      && (key !== 'agentChannel' || fieldVisibility.showAgentChannel)
+      && (key !== 'payableCost' || fieldVisibility.showPayableCost)
+      && (key !== 'payableStatus' || fieldVisibility.showPayableStatus)
+    ),
+    [fieldVisibility]
+  );
+  const visibleLinePoolMatrixColumnOrder = useMemo(
+    () => defaultLinePoolMatrixColumnOrder.filter((key) =>
+      key !== 'matrixAgent'
+      || fieldVisibility.showAgentShortName
+      || fieldVisibility.showAgentChannel
+      || fieldVisibility.showPayableCost
+    ),
+    [fieldVisibility]
+  );
+  const linePoolColumnSettingsForRole = useMemo(
+    () => ({
+      ...linePoolColumnSettings,
+      labels: Object.fromEntries(visibleLinePoolMatrixColumnOrder.map((key) => [key, linePoolColumnLabels[key]])),
+      defaultColumnOrder: visibleLinePoolMatrixColumnOrder
+    }),
+    [visibleLinePoolMatrixColumnOrder]
+  );
+  const linePoolLedgerColumnSettingsForRole = useMemo(
+    () => ({
+      ...linePoolLedgerColumnSettings,
+      labels: Object.fromEntries(visibleLinePoolDetailColumnOrder.map((key) => [key, linePoolLedgerColumnSettings.labels[key]])),
+      defaultHiddenKeys: linePoolLedgerColumnSettings.defaultHiddenKeys.filter((key) => visibleLinePoolDetailColumnOrder.includes(key as LinePoolDetailColumnKey)),
+      defaultColumnOrder: visibleLinePoolDetailColumnOrder
+    }),
+    [visibleLinePoolDetailColumnOrder]
+  );
   const canProcess = can('operations:line-shipment:process') && can('operations:line-shipment:status-update');
   const canProcessLineShipment = useCallback((row: LineShipmentPoolRow) => {
     if (!canProcess || role === 'ADMIN') return canProcess;
@@ -737,14 +750,8 @@ export function OperationsPage({
     }
   }), [apiClient, can, canProcessLineShipment, canViewSensitive, onProcessShipment, onViewShipment]);
   const linePoolDetailColumns = useMemo(
-    () => defaultLinePoolDetailColumnOrder
-      .filter((key) => key !== 'agentName' || fieldVisibility.showAgentCompanyName)
-      .filter((key) => key !== 'agentShortName' || fieldVisibility.showAgentShortName)
-      .filter((key) => key !== 'agentChannel' || fieldVisibility.showAgentChannel)
-      .filter((key) => key !== 'payableCost' || fieldVisibility.showPayableCost)
-      .filter((key) => key !== 'payableStatus' || fieldVisibility.showPayableStatus)
-      .map((key) => linePoolDetailColumnMap[key]),
-    [fieldVisibility, linePoolDetailColumnMap]
+    () => visibleLinePoolDetailColumnOrder.map((key) => linePoolDetailColumnMap[key]),
+    [linePoolDetailColumnMap, visibleLinePoolDetailColumnOrder]
   );
   const linePoolColumns = useMemo<ManagedTableColumn<LineShipmentPoolRow>[]>(
     () => [
@@ -795,7 +802,7 @@ export function OperationsPage({
       },
       ...(fieldVisibility.showAgentShortName || fieldVisibility.showAgentChannel || fieldVisibility.showPayableCost ? [{
         key: 'matrixAgent',
-        title: '代理数据',
+        title: fieldVisibility.showAgentShortName || fieldVisibility.showAgentChannel ? '代理数据' : '应付信息',
         width: linePoolMatrixColumnWeights.matrixAgent,
         className: 'line-pool-matrix-group-agent',
         sortValue: (row: LineShipmentPoolRow) => `${row.shipment.agentName ?? ''}|${row.shipment.routeAgentChannelName ?? ''}`,
@@ -1017,7 +1024,9 @@ export function OperationsPage({
                     allowClear
                     prefix={<Search size={16} />}
                     value={linePoolDraft.keyword}
-                    placeholder="搜索客户 / 出货单号 / 快递号 / 转单号 / 渠道 / 代理"
+                    placeholder={fieldVisibility.showAgentShortName || fieldVisibility.showAgentChannel
+                      ? '搜索客户 / 出货单号 / 快递号 / 转单号 / 渠道 / 代理'
+                      : '搜索客户 / 出货单号 / 快递号 / 转单号 / 渠道'}
                     onChange={(event) => setLinePoolDraft((current) => ({ ...current, keyword: event.target.value }))}
                     onPressEnter={handleLinePoolSearch}
                   />
@@ -1082,7 +1091,7 @@ export function OperationsPage({
                     className: 'line-pool-table line-pool-unified-font line-pool-matrix-table',
                     tableLayout: 'fixed',
                     minimumScrollX: 0,
-                    columnSettings: linePoolColumnSettings
+                    columnSettings: linePoolColumnSettingsForRole
                   }
                 },
                 ledger: {
@@ -1091,7 +1100,7 @@ export function OperationsPage({
                     recordDetail: { title: '运单池详情' },
                     className: 'line-pool-table line-pool-unified-font line-pool-ledger-table',
                     minimumScrollX: 1420,
-                    columnSettings: linePoolLedgerColumnSettings
+                    columnSettings: linePoolLedgerColumnSettingsForRole
                   }
                 }
               }}

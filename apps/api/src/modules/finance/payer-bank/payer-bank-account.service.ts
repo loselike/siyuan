@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type {
   PayerBankAccountInput,
   PayerBankAccountListQuery,
@@ -6,6 +6,7 @@ import type {
   PayerBankAccountSummary
 } from '@siyuan/shared';
 import type { Principal } from '../../rbac.js';
+import { PrismaRepository } from '../../prisma.repository.js';
 import {
   PAYER_BANK_ACCOUNT_REPOSITORY,
   type PayerBankAccountCreateData,
@@ -18,21 +19,25 @@ import {
 export class PayerBankAccountService {
   constructor(
     @Inject(PAYER_BANK_ACCOUNT_REPOSITORY)
-    private readonly repository: PayerBankAccountRepository
+    private readonly repository: PayerBankAccountRepository,
+    @Inject(PrismaRepository)
+    private readonly appRepository: PrismaRepository
   ) {}
 
-  async list(query: PayerBankAccountListQuery = {}): Promise<PayerBankAccountListResponse> {
+  async list(principal: Principal, query: PayerBankAccountListQuery = {}): Promise<PayerBankAccountListResponse> {
+    await this.ensureActionAllowed(principal, 'master-data:payer-banks:read');
     if (query.keyword !== undefined && typeof query.keyword !== 'string') {
       throw new BadRequestException('搜索条件格式不正确');
     }
-    const rows = await this.repository.findMany(query);
+    const rows = await this.repository.findMany(principal, query);
     return { items: rows.map(toSummary) };
   }
 
   async create(principal: Principal, input: PayerBankAccountInput): Promise<PayerBankAccountSummary> {
+    await this.ensureActionAllowed(principal, 'master-data:payer-banks:create');
     const data = normalizeInput(input, true) as PayerBankAccountCreateData;
-    await this.ensureUniqueAccountNo(data.accountNoNormalized);
-    const row = await mapUniqueAccountNoError(() => this.repository.create(data, {
+    await this.ensureUniqueAccountNo(principal, 'master-data:payer-banks:create', data.accountNoNormalized);
+    const row = await mapUniqueAccountNoError(() => this.repository.create(principal, data, {
       actorId: principal.id,
       principal,
       action: 'master-data.payer-bank.create',
@@ -46,13 +51,14 @@ export class PayerBankAccountService {
     id: string,
     input: Partial<PayerBankAccountInput>
   ): Promise<PayerBankAccountSummary> {
-    const current = await this.repository.findById(id);
+    await this.ensureActionAllowed(principal, 'master-data:payer-banks:update');
+    const current = await this.repository.findById(principal, 'master-data:payer-banks:update', id);
     if (!current) throw new NotFoundException('付款银行资料不存在');
     const data = normalizeInput(input, false) as PayerBankAccountUpdateData;
     if (data.accountNoNormalized) {
-      await this.ensureUniqueAccountNo(data.accountNoNormalized, id);
+      await this.ensureUniqueAccountNo(principal, 'master-data:payer-banks:update', data.accountNoNormalized, id);
     }
-    const row = await mapUniqueAccountNoError(() => this.repository.update(id, data, {
+    const row = await mapUniqueAccountNoError(() => this.repository.update(principal, id, data, {
       actorId: principal.id,
       principal,
       action: 'master-data.payer-bank.update',
@@ -63,9 +69,10 @@ export class PayerBankAccountService {
   }
 
   async delete(principal: Principal, id: string) {
-    const current = await this.repository.findById(id);
+    await this.ensureActionAllowed(principal, 'master-data:payer-banks:delete');
+    const current = await this.repository.findById(principal, 'master-data:payer-banks:delete', id);
     if (!current) throw new NotFoundException('付款银行资料不存在');
-    await this.repository.delete(id, {
+    await this.repository.delete(principal, id, {
       actorId: principal.id,
       principal,
       action: 'master-data.payer-bank.delete',
@@ -74,9 +81,22 @@ export class PayerBankAccountService {
     return { id, deleted: true as const };
   }
 
-  private async ensureUniqueAccountNo(accountNoNormalized: string, excludeId?: string) {
-    if (await this.repository.findByNormalizedAccountNo(accountNoNormalized, excludeId)) {
+  private async ensureUniqueAccountNo(principal: Principal, permission: 'master-data:payer-banks:create' | 'master-data:payer-banks:update', accountNoNormalized: string, excludeId?: string) {
+    if (await this.repository.findByNormalizedAccountNo(principal, permission, accountNoNormalized, excludeId)) {
       throw new BadRequestException('付款方账号已存在');
+    }
+  }
+
+  private async ensureActionAllowed(
+    principal: Principal,
+    permission: 'master-data:payer-banks:read' | 'master-data:payer-banks:create' | 'master-data:payer-banks:update' | 'master-data:payer-banks:delete'
+  ) {
+    const fieldMasks = principal.globalFieldMasks ?? await this.appRepository.getGlobalFieldMaskState(principal);
+    if (fieldMasks['payable-cost']) {
+      throw new ForbiddenException('总规则已屏蔽付款方银行资料');
+    }
+    if (principal.role !== 'ADMIN' && !await this.appRepository.hasPermission(principal.role, permission)) {
+      throw new ForbiddenException('没有付款银行资料操作权限');
     }
   }
 }

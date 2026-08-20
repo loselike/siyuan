@@ -7,6 +7,8 @@ import type {
   WarehousePackageDeleteInput,
   WarehousePackageDeleteResponse,
   WarehousePackageSummary,
+  WarehouseTallySortRule,
+  WarehouseTallySortRuleInput,
   WarehouseTallyTaskListQuery,
   WarehouseTallyTaskSummary,
   WarehouseTodayQuery,
@@ -79,6 +81,17 @@ export class WarehouseQueryClient {
     });
     const search = params.toString();
     return this.request(`/warehouse/tally-tasks${search ? `?${search}` : ''}`);
+  }
+
+  warehouseTallySortRules(): Promise<WarehouseTallySortRule[]> {
+    return this.request('/warehouse/tally-sort-rules');
+  }
+
+  updateWarehouseTallySortRules(rules: WarehouseTallySortRuleInput[]): Promise<WarehouseTallySortRule[]> {
+    return this.request('/warehouse/tally-sort-rules', {
+      method: 'PUT',
+      body: JSON.stringify({ rules })
+    });
   }
 
   warehouseTallyTaskSourcePackages(id: string): Promise<WarehousePackageSummary[]> {

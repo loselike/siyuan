@@ -9,13 +9,17 @@ const { Text } = Typography;
 
 interface PayerBankAccountsPageProps {
   apiClient: ApiClient;
-  canWrite: boolean;
+  canCreate: boolean;
+  canUpdate: boolean;
+  canDelete: boolean;
   onNotice: (message: string) => void;
 }
 
 export function PayerBankAccountsPage({
   apiClient,
-  canWrite,
+  canCreate,
+  canUpdate,
+  canDelete,
   onNotice
 }: PayerBankAccountsPageProps) {
   const [rows, setRows] = useState<PayerBankAccountSummary[]>([]);
@@ -114,12 +118,12 @@ export function PayerBankAccountsPage({
     {
       title: '操作',
       key: 'actions',
-      width: canWrite ? 142 : 76,
+      width: canUpdate || canDelete ? 142 : 76,
       fixed: 'right',
-      render: (_: unknown, row: PayerBankAccountSummary) => canWrite ? (
+      render: (_: unknown, row: PayerBankAccountSummary) => canUpdate || canDelete ? (
         <Space size={4}>
-          <Button size="small" onClick={() => openEdit(row)}>编辑</Button>
-          <Popconfirm
+          {canUpdate ? <Button size="small" onClick={() => openEdit(row)}>编辑</Button> : null}
+          {canDelete ? <Popconfirm
             title="确认删除该付款银行资料？"
             description="删除后不能恢复，请确认该账号已不再使用。"
             okText="确认删除"
@@ -128,7 +132,7 @@ export function PayerBankAccountsPage({
             onConfirm={() => void remove(row)}
           >
             <Button size="small" danger>删除</Button>
-          </Popconfirm>
+          </Popconfirm> : null}
         </Space>
       ) : <Tag>只读</Tag>
     }
@@ -139,7 +143,7 @@ export function PayerBankAccountsPage({
       <Card
         className="finance-work-card"
         title="付款银行资料"
-        extra={canWrite ? <Button type="primary" onClick={openCreate}>新增付款银行</Button> : null}
+        extra={canCreate ? <Button type="primary" onClick={openCreate}>新增付款银行</Button> : null}
       >
         <div className="payer-bank-toolbar">
           <Input.Search

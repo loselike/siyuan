@@ -23,13 +23,13 @@ export class WarehouseInventoryQueryController {
   @Get('warehouse/today-receipts')
   @RequirePermission('warehouse:today-receipt:view')
   warehouseTodayReceipts(@Req() request: { user: Principal }, @Query() query: WarehouseTodayQuery) {
-    return this.auditedRepository.getWarehouseTodayReceipts(request.user, query);
+    return this.service.listTodayReceipts(request.user, query);
   }
 
   @Get('warehouse/in-stock')
   @RequirePermission('warehouse:in-stock:view')
   warehouseInStock(@Req() request: { user: Principal }, @Query() query: WarehouseInStockQuery) {
-    return this.auditedRepository.getWarehouseInStock(request.user, query);
+    return this.service.listInStock(request.user, query);
   }
 
   @Get('warehouse/in-stock-page')
@@ -41,7 +41,7 @@ export class WarehouseInventoryQueryController {
   @Get('warehouse/in-stock-summary')
   @RequirePermission(['warehouse:dashboard:view', 'warehouse:in-stock:view'])
   warehouseInStockSummary(@Req() request: { user: Principal }) {
-    return this.auditedRepository.getWarehouseInStockSummary(request.user);
+    return this.service.getInStockSummary(request.user);
   }
 
   @Post('warehouse/today-receipts/batch-delete')

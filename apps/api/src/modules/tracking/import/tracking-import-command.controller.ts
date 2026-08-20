@@ -1,5 +1,5 @@
 import { Body, Controller, Inject, Post, Req } from '@nestjs/common';
-import { RequireAuth } from '../../require-permission.decorator.js';
+import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
 import type { TrackingImportCommandInput } from './tracking-import-command.repository.js';
 import { TrackingImportCommandService } from './tracking-import-command.service.js';
@@ -12,7 +12,7 @@ export class TrackingImportCommandController {
   ) {}
 
   @Post('shipments/tracking-events/import')
-  @RequireAuth()
+  @RequirePermission('tracking:external:import')
   async importTrackingEvents(
     @Req() request: { user: Principal },
     @Body() body: TrackingImportCommandInput

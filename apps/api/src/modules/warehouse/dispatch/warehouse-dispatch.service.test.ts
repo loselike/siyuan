@@ -14,6 +14,7 @@ function repositoryStub(
   return {
     getWarehouseDispatchShipments: vi.fn(),
     updateWarehouseDispatchDeclaration: vi.fn(),
+    updateWarehouseDispatchInboundNo: vi.fn(),
     getWarehouseHandover: vi.fn(),
     printWarehouseHandover: vi.fn(),
     dispatchShipment: vi.fn(),
@@ -74,12 +75,12 @@ describe('WarehouseDispatchService', () => {
     expect(authorizer.hasPermission).toHaveBeenNthCalledWith(
       1,
       principal.role,
-      'warehouse:dispatch-pending:dispatch-confirm'
+      'warehouse:dispatch-pending:confirm'
     );
     expect(authorizer.hasPermission).toHaveBeenNthCalledWith(
       2,
       principal.role,
-      'warehouse:dispatch-pending:batch-dispatch-confirm'
+      'warehouse:dispatch-pending:confirm'
     );
     expect(authorizer.hasPermission).toHaveBeenNthCalledWith(
       3,
@@ -95,25 +96,16 @@ describe('WarehouseDispatchService', () => {
   it.each([
     {
       label: 'base confirmation',
-      denied: 'warehouse:dispatch-pending:dispatch-confirm' as const,
+      denied: 'warehouse:dispatch-pending:confirm' as const,
       input: {},
-      checked: ['warehouse:dispatch-pending:dispatch-confirm']
-    },
-    {
-      label: 'batch confirmation',
-      denied: 'warehouse:dispatch-pending:batch-dispatch-confirm' as const,
-      input: { batchDispatchSource: 'warehouse.batch_dispatch_handover' },
-      checked: [
-        'warehouse:dispatch-pending:dispatch-confirm',
-        'warehouse:dispatch-pending:batch-dispatch-confirm'
-      ]
+      checked: ['warehouse:dispatch-pending:confirm']
     },
     {
       label: 'shipping mark confirmation',
       denied: 'warehouse:dispatch-pending:shipping-mark-confirm' as const,
       input: { shippingMarkConfirmed: true },
       checked: [
-        'warehouse:dispatch-pending:dispatch-confirm',
+        'warehouse:dispatch-pending:confirm',
         'warehouse:dispatch-pending:shipping-mark-confirm'
       ]
     }

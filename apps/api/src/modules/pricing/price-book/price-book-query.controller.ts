@@ -1,5 +1,7 @@
-import { BadRequestException, Controller, ForbiddenException, Get, Inject, Param, Query, Req } from '@nestjs/common';
-import type { LegacyPricingModule, PriceBookImportJobListQuery, PriceBookImportTargetModule } from '@siyuan/shared';
+import { extname } from 'node:path';
+import { BadRequestException, Controller, ForbiddenException, Get, Inject, Param, Query, Req, Res, StreamableFile } from '@nestjs/common';
+import type { LegacyPricingModule, MarkupRouteListQuery, PriceBookImportJobListQuery, PriceBookImportTargetModule, PriceBookRowsQuery } from '@siyuan/shared';
+import type { Response } from 'express';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
@@ -32,6 +34,64 @@ export class PriceBookQueryController {
     @Query() query: { page?: number; pageSize?: number; legacyModule?: LegacyPricingModule | 'unclassified' }
   ) {
     return this.repository.getPricingSyncHealth(request.user, query);
+  }
+
+  @Get('pricing/books/rule-refresh-progress')
+  @RequirePermission('pricing:price-books:health')
+  async priceBookRuleRefreshProgress(@Req() request: { user: Principal }) {
+    return this.repository.getPriceBookRuleRefreshProgress(request.user);
+  }
+
+  @Get('pricing/book-rows')
+  @RequirePermission('pricing:price-books:view')
+  async priceBookRows(@Req() request: { user: Principal }, @Query() query: PriceBookRowsQuery) {
+    return this.repository.getPriceBookRows(request.user, undefined, query);
+  }
+
+  @Get('pricing/books/:id/rows')
+  @RequirePermission([
+    'pricing:price-books:view',
+    'pricing:price-books:export',
+    'pricing:price-books:update',
+    'pricing:price-books:delete',
+    'pricing:markup:amazon:view',
+    'pricing:markup:inquiry:view',
+    'pricing:markup:europeExpress:view',
+    'pricing:markup:southAfrica:view',
+    'pricing:markup:usaAirSea:view',
+    'pricing:markup:canadaAirSea:view',
+    'pricing:markup:dubaiAirSea:view'
+  ])
+  async priceBookRowsByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: PriceBookRowsQuery) {
+    return this.repository.getPriceBookRows(request.user, id, query);
+  }
+
+  @Get('pricing/books/:id/markup-routes')
+  @RequirePermission([
+    'pricing:markup:amazon:view',
+    'pricing:markup:inquiry:view',
+    'pricing:markup:europeExpress:view',
+    'pricing:markup:southAfrica:view',
+    'pricing:markup:usaAirSea:view',
+    'pricing:markup:canadaAirSea:view',
+    'pricing:markup:dubaiAirSea:view'
+  ])
+  async markupRoutesByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: MarkupRouteListQuery) {
+    return this.repository.getMarkupRoutes(request.user, id, query);
+  }
+
+  @Get('pricing/books/:id/download')
+  @RequirePermission('pricing:price-books:export')
+  async downloadPriceBook(@Req() request: { user: Principal }, @Param('id') id: string, @Res({ passthrough: true }) response: Response) {
+    const file = await this.repository.downloadPriceBook(request.user, id);
+    const extension = extname(file.fileName).toLowerCase();
+    const mimeType = extension === '.xls'
+      ? 'application/vnd.ms-excel'
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    response.setHeader('Content-Type', mimeType);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader('Content-Disposition', `attachment; filename="price-book${extension || '.xlsx'}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+    return new StreamableFile(file.buffer);
   }
 
   @Get('pricing/books/import-jobs/:id')
