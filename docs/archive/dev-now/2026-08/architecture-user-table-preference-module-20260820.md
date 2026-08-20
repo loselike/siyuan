@@ -1,6 +1,6 @@
 # 架构控制面快速落地（二）
 
-- 状态：`in_progress`
+- 状态：`complete`
 - 会话标题：`Sunny｜架构控制面快速落地｜02`
 - 续接自：`docs/archive/dev-now/2026-08/architecture-reset-control-plane-20260820.md`
 - 上下文状态：`green`
@@ -50,8 +50,10 @@
 ## 交接
 
 - 阻塞：无
-- 发布状态：`未发布`
+- 发布状态：`已发布`
 - 本地完成：新增 `UserTablePreferenceModule`，根 `AppModule` 从 41 个直接 Controller / 67 个直接 Provider / 418 行降至 40 / 66 / 414；原 Prisma/InMemory 选择逻辑原样迁移。
 - 行为证据：用户偏好固定样本 9/9 通过，覆盖 key/value 既有错误、保存、列表、删除和 A/B 用户隔离；API typecheck 通过。
 - 安全证据：448 路由契约保持不变；架构门禁与 17 类失败自测、完整 governance、context check、`git diff --check` 通过。
-- 准确下一步：提交并通过 GitHub CI 后，进入干净发布协调 worktree，按 API-only 范围精确发布 47 并验证健康、未登录 401、镜像/源码指纹、日志、发布锁与 recovery 状态。
+- GitHub：PR [#15](https://github.com/loselike/siyuan/pull/15) 已合并为 `cb9f3c2e440dec4d26469f50fae445fa9647b122`；主干 affected、API/Web/migrate 不可变镜像与 release manifest 全部通过。
+- 47：API-only 发布 `git-cb9f3c2e440d_web-f7984a62526a_api-0e4acb7911bf` 成功；未运行 migration/seed。公网与容器 health 正常，GET/PUT/DELETE 三条未登录路径均为 401，模块源码本地/47 SHA-256 均为 `853176e0b8b130c81c7ef0c87192db1aaeeb1416b3839bb9b7396721773a8faa`，近 15 分钟 API 日志无目标错误，provenance/镜像/API release ID 匹配，锁 free、recovery clear。
+- 下一阶段：按阶段重评重新比较运行时输入安全、高频前端数据所有权和后端模块化收益；不得自动扩大到批量 schema、缓存语义或巨型 Repository 切换。
