@@ -4,11 +4,11 @@
 - 会话标题：`Sunny｜架构控制面快速落地｜06`
 - 续接自：`docs/archive/dev-now/2026-08/role-permission-reader-phase5-20260821.md`
 - 上下文状态：`green`
-- 已观察压缩：`1`
+- 已观察压缩：`2`
 - 输入来源：`无（持续目标自动续接）`
 - 会话 slug：`warehouse-package-runtime-input-phase6-20260821`
-- 分支：`待从最新 main 创建 codex/warehouse-package-runtime-input-phase6-20260821`
-- worktree：`待创建独立 worktree`
+- 分支：`codex/warehouse-package-runtime-input-phase6-20260821`
+- worktree：`/Users/j1ng/Tools/sunny-warehouse-package-runtime-input-phase6-20260821`
 - 认领时间：`2026-08-21 Asia/Shanghai`
 
 ## 用户可见目标
@@ -48,6 +48,10 @@
 ## 当前进度
 
 - 已完成阶段重评并选定 5 条仓库包裹写接口；已检查 NestJS/Medusa 官方输入校验边界，尚未开始运行时代码修改。
+- 已从最新 `main@59f5d13d` 创建独立 worktree，开始补迁移前非法输入 characterization。
+- 迁移前 characterization 已通过 3/3：五条接口均先执行鉴权/权限（未登录 401、客户角色 403）；数字型 `customerCode`、`remark`、`manualException` 和两个删除入口的字符串型 `ids` 当前都会在 Repository 抛出 `TypeError` 并返回 500；空 `ids`、空删除原因和超长删除原因分别保持既有精确 400 文案；所有失败请求后固定包裹未发生持久化变化。
+- 两个删除入口的合法管理员路径已冻结：均返回既有 201 与 `{ deletedIds, deletedCount }`，随后列表中对应包裹不存在；原有生命周期 E2E 已覆盖编辑、备注、异常的合法响应、持久化与审计。
+- 标准 `RuntimeInputSchema` 会把上述四类畸形请求从非受控 500 改为稳定 400。这属于可观察错误契约优化，不能按行为等价重构自行实施，正在等待用户明确授权；合法请求、权限、成功响应、状态和持久化均无需改变。
 
 ## 验证计划
 
@@ -56,6 +60,7 @@
 
 ## 交接
 
-- 阻塞：无
+- 阻塞：需要用户决定是否授权将四类畸形请求从 500 改为稳定 400；在此之前不得修改运行时代码。
 - 发布状态：`未实施`
-- 准确下一步：归档 Phase5 状态，从最新 main 创建独立 worktree，先补迁移前 characterization，再实现 5 个等价 runtime schema。
+- 交接检查点：独立 worktree 依赖、Shared 构建和 Prisma Client 已就绪；迁移前测试 3/3 已证实五条接口的鉴权先后、合法删除效果、四类畸形请求 500、既有三类业务校验 400 文案及失败后不落库；运行时代码尚未修改。
+- 准确下一步：取得用户对 500 -> 400 错误契约优化的明确授权后，实现 5 个 Controller 边界 runtime schema，补 Shared schema/允许拒绝/E2E/架构门禁，完成审查、合并、CI、精确发布 47 与线上验证。
