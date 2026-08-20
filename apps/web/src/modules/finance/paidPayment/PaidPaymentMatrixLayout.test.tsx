@@ -44,7 +44,10 @@ describe('PaidPaymentPage matrix layout', () => {
     window.localStorage.removeItem('sunny.finance.paidPayment.view-v1');
     window.localStorage.removeItem('sunny.finance.paidPayment.matrix-columns-v1:widths');
     const paidPayments = vi.fn().mockResolvedValue(response);
-    const apiClient = { paidPayments } as unknown as ApiClient;
+    const apiClient = {
+      paidPayments,
+      downloadProtectedAsset: vi.fn().mockResolvedValue(new globalThis.Blob(['receipt'], { type: 'image/png' }))
+    } as unknown as ApiClient;
 
     const { container } = render(
       <AntdApp>
@@ -53,7 +56,8 @@ describe('PaidPaymentPage matrix layout', () => {
           permissions={[
             'finance:paid-payment:read',
             'finance:paid-payment:reverse',
-            'finance:paid-payment:update'
+            'finance:paid-payment:update',
+            'finance:paid-payment:voucher-view'
           ] as PermissionKey[]}
           renderShipmentOrderNoLink={(value) => value ?? '-'}
           viewMode="paid"
@@ -77,5 +81,48 @@ describe('PaidPaymentPage matrix layout', () => {
     expect(container.querySelector('.finance-paid-payment-matrix-table')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '反核销' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /补\s*充/ })).toBeInTheDocument();
+  });
+
+  it('shows the delete action for an uploaded water receipt only with its permission', async () => {
+    window.localStorage.removeItem('sunny.finance.paidPayment.view-v1');
+    const paidPayments = vi.fn().mockResolvedValue({
+      ...response,
+      rows: [{
+        ...paidPayment,
+        status: 'WAITING_PAYMENT',
+        waterReceipts: [{
+          id: 'payment-receipt-1',
+          paymentApplicationId: paidPayment.id,
+          voucherType: 'PAYMENT_RECEIPT',
+          fileName: '上传错误的水单.png',
+          url: '/api/uploads/vouchers/wrong.png',
+          uploadedBy: 'finance',
+          createdAt: '2026-08-20T01:00:00.000Z'
+        }]
+      }]
+    } satisfies PaidPaymentListResponse);
+    const apiClient = {
+      paidPayments,
+      downloadProtectedAsset: vi.fn().mockResolvedValue(new globalThis.Blob(['receipt'], { type: 'image/png' }))
+    } as unknown as ApiClient;
+
+    render(
+      <AntdApp>
+        <PaidPaymentPage
+          apiClient={apiClient}
+          permissions={[
+            'finance:paid-payment:read',
+            'finance:paid-payment:voucher-view',
+            'finance:paid-payment:voucher-delete'
+          ] as PermissionKey[]}
+          renderShipmentOrderNoLink={(value) => value ?? '-'}
+          viewMode="paid"
+        />
+      </AntdApp>
+    );
+
+    await waitFor(() => expect(paidPayments).toHaveBeenCalled());
+    expect(screen.getByText('上传错误的水单.png')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /删\s*除/ })).toBeInTheDocument();
   });
 });

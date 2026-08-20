@@ -271,6 +271,7 @@ const financePermissionControls: Record<string, PermissionControl[]> = {
     control('finance-paid-reverse', '反核销', '撤销已付款确认并退回待付款。', '高风险操作', 'high', ['finance:paid-payment:reverse']),
     control('finance-paid-voucher-view', '查看付款凭证', '查看付款凭证。', '敏感字段', 'sensitive', ['finance:paid-payment:voucher-view']),
     control('finance-paid-voucher-upload', '上传付款凭证', '上传或补充付款凭证。', '高风险操作', 'high', ['finance:paid-payment:voucher-upload']),
+    control('finance-paid-voucher-delete', '删除付款凭证', '删除上传错误的付款水单，操作会保留审计记录。', '高风险操作', 'high', ['finance:paid-payment:voucher-delete']),
     control('finance-paid-bank-view', '查看付款银行', '查看收付款银行字段。', '敏感字段', 'sensitive', ['finance:paid-payment:bank-view']),
     control('finance-paid-export', '导出', '导出已付款数据。', '高风险操作', 'high', ['finance:paid-payment:export'])
   ],

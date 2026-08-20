@@ -59,7 +59,13 @@ describe('RBAC default permission inheritance', () => {
       'finance:paid-payment:read',
       'finance:paid-payment:confirm',
       'finance:paid-payment:reverse',
+      'finance:paid-payment:voucher-delete',
       'finance:paid-payment:export'
+    ]));
+    expect(normalizeRolePermissions('UG_FINANCE_CUSTOM', ['finance:paid-payment:voucher-delete'])).toEqual(expect.arrayContaining([
+      'finance:paid-payment:read',
+      'finance:paid-payment:voucher-view',
+      'finance:paid-payment:voucher-delete'
     ]));
     expect(paidPayments.some((permission) => permission.code.startsWith('finance:payable:paid-'))).toBe(false);
   });

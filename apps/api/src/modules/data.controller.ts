@@ -2562,6 +2562,12 @@ export class DataController {
     return this.repository.addPaymentWaterReceipt(request.user, body);
   }
 
+  @Delete('finance/payment-water-receipts/:id')
+  @RequirePermission('finance:paid-payment:voucher-delete')
+  async deletePaymentWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.deletePaymentWaterReceipt(request.user, id);
+  }
+
   @Get('finance/agent-bank-accounts')
   @RequirePermission(['master-data:agents:read', 'finance:paid-payment:bank-view'])
   async agentBankAccounts(@Req() request: { user: Principal }, @Query() query: { agentName?: string; agentId?: string; includeDisabled?: string | boolean }) {
