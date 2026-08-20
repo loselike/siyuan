@@ -118,6 +118,18 @@ function isDirectBankDataPath(requestPath: string): boolean {
   return /\/api\/(?:master-data\/payer-bank-accounts|finance\/(?:payee|agent)-bank-accounts)(?:\/|\?|$)/i.test(requestPath);
 }
 
+function isRepositorySanitizedInternalFlowSummary(
+  requestPath: string,
+  key: string,
+  ancestors: readonly string[]
+): boolean {
+  return key === 'summary'
+    && ancestors.length === 2
+    && normalizedKey(ancestors[0] ?? '') === 'items'
+    && /^\d+$/.test(ancestors[1] ?? '')
+    && /\/api\/operations\/line-shipments\/[^/?]+\/internal-flow-log(?:\?|$)/i.test(requestPath);
+}
+
 export function isGlobalSensitiveFilePathBlocked(requestPath: string, state: GlobalFieldMaskState): boolean {
   const path = requestPath.split('?')[0] ?? requestPath;
   if (!/(?:export|download|attachment|voucher|template|\/file(?:\/|$)|\/image(?:\/|$)|shipment-label)/i.test(path)) return false;
@@ -173,6 +185,7 @@ function fieldIsMasked(
 
   if ((agentMasked || state['payable-cost'] || state['payable-status']) && key === 'raw') return true;
   if (narrativeContext && ['summary', 'message', 'description', 'detail', 'details'].includes(key)
+    && !isRepositorySanitizedInternalFlowSummary(requestPath, key, ancestors)
     && (agentMasked || state['payable-cost'] || state['payable-status'])) return true;
 
   if ((state['agent-short-name'] || state['agent-data'])

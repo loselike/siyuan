@@ -86,6 +86,27 @@ describe('global sensitive field deny baseline', () => {
     expect(maskGlobalSensitiveValue({
       agents: [{ id: 'agent-1', name: 'masked-agent' }],
       agentChannels: [{ id: 'channel-1', name: 'masked-channel' }]
-    }, state, '/api/master-data')).toEqual({});
+    }, state, '/api/master-data')).toEqual({ agents: [], agentChannels: [] });
+  });
+
+  it('keeps repository-sanitized internal-flow summaries while removing agent identity fields', () => {
+    const state = resolveGlobalFieldMaskState([
+      'system:global-mask:agent-short-name',
+      'system:global-mask:agent-company-name',
+      'system:global-mask:agent-channel'
+    ] as PermissionKey[]);
+
+    expect(maskGlobalSensitiveValue({
+      summary: '不得豁免的顶层说明',
+      items: [{
+        stage: '市场排货',
+        summary: '已完成市场排货',
+        agentName: '宇环',
+        agentChannelName: '宇环 DHL'
+      }]
+    }, state, '/api/operations/line-shipments/shipment-1/internal-flow-log')).toEqual({
+      items: [{ stage: '市场排货', summary: '已完成市场排货' }]
+    });
+    expect(maskGlobalSensitiveValue({ summary: '宇环已完成操作' }, state, '/api/audit')).toEqual({});
   });
 });
