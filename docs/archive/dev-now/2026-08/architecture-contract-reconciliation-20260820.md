@@ -1,9 +1,11 @@
 # 架构路由契约对账（2026-08-20）
 
-- 状态：`in_progress`
+- 状态：`published_47`
 - branch: `codex/architecture-contract-reconciliation-20260820`
-- baseline: `9012a8c422003a63c69730a6b3cc33f0bf48bb5d`
+- baseline: `d36f1833b1c0223e7ea609be76cc5a63d8fbb602`
 - production ancestor: `1881c1e4fe3bdad7c2f219f81c294d82148e2944`
+- merged commit: `fffbe89bf553e7934431e3b8e763b46e686b39ee`
+- release ID: `git-fffbe89bf553_web-32159ac4e7bd_api-d74731d0b144`
 
 ## 用户验收目标
 
@@ -37,6 +39,9 @@
 - 本地通过：API typecheck、`git diff --check`、`architecture:check`（448 route contracts、lint no-new-debt、Mojia 3/3），以及 11 个相关测试文件的定向验证。
 - 权限专项独立审查无 P0/P1；审查提出的系统 HTTP 允许/拒绝、内部日志 401 和运单 `costScope`/字段裁剪三项 P2 保护缺口已全部补齐。
 
-## 待完成
+## 47 完成证据
 
-- 精确发布 API 到 47，验证路由、权限、容器、release provenance 和错误日志。
+- 主干 CI affected 与 API/Web/db-migrate 不可变镜像、release manifest 全部通过。
+- 标准发布自动判定 `RELEASE_SCOPE=api`、`MIGRATION_REQUIRED=false`，仅重启 API。
+- 47 容器内真实账号短期 JWT 只读探针：系统角色 200/403、客户来源 200/403、运单列表 200/403 并检查 21 条返回无财务敏感字段、内部流通日志 200/403。
+- provenance 为 `traceable/ok`，Git commit、API 镜像、API release ID 一致；公网 health 200，近 10 分钟 API 关键错误日志 0，发布锁 free，recovery clear。
