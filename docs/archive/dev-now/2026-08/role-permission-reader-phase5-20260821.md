@@ -1,6 +1,6 @@
 # 角色权限唯一 Prisma Reader
 
-- 状态：`in_progress`
+- 状态：`complete`
 - 会话标题：`Sunny｜架构控制面快速落地｜05`
 - 续接自：`docs/archive/dev-now/2026-08/shipment-overview-prisma-query-phase4-20260821.md`
 - 上下文状态：`green`
@@ -63,9 +63,13 @@
 - Reader 与 ShipmentOverview 定向保护 22/22：管理员缺省、停用岗位、报价派生、同角色并发去重、失败重试、返回数组隔离、销售范围记忆/失效、注入委托、市场字段裁剪、业务本人范围、Service/Policy/E2E/Legacy 全部通过。
 - API typecheck、448 路由、no-new-lint-debt、治理、上下文、安全契约 3/3 与 `git diff --check` 通过。
 - 对抗检查：Reader 不保留跨请求 TTL；完成/失败均清除 in-flight；返回权限数组复制；InMemory 模式不注册 Prisma Reader；生产 DataAccess 中总仓储与 ShipmentOverview 使用同一 singleton provider。
+- 主干：PR #21 合并为 `f3f36dfbd421f6ff0564a1e783f165ed5520f1ac`；CI affected、API/Web/migrate 镜像与 release manifest 全部通过。
+- 47：API-only 发布 `git-f3f36dfbd421_web-2020decf8c83_api-2104a8ac9428`，未迁移、未 seed；管理员运单 91 条/状态 19 类/角标 21 项，市场 46 条且站点越界 0、敏感字段违规 0，业务和两个仓库岗位拒绝均 403，四条未登录均 401。
+- 47 发布证据：4 个运行时源码 checksum 与候选一致；provenance 可追溯、API/Web image 与 API release ID 匹配；公网/容器 health、10 分钟关键错误日志、锁、recovery 和运行时韧性均正常。
 
 ## 交接
 
 - 阻塞：无
-- 发布状态：`本地已完成，待主干 CI 与 47 发布`
-- 准确下一步：完成差异复核与 API 类型检查，提交 PR；主干 CI 通过后从干净发布协调 worktree执行 API-only 精确发布并验证固定角色样本。
+- 剩余风险：生产没有启用客户样本，本阶段未造生产用户；客户拒绝路径继续由本地 E2E 保护。Reader 只去重同时发生的权限读取，不缓存已完成结果，后续若要进一步降低顺序查询必须另做请求级快照并重新保护动态权限语义。
+- 发布状态：`已发布：git-f3f36dfbd421_web-2020decf8c83_api-2104a8ac9428`
+- 准确下一步：执行阶段完成重评，比较输入安全、前端数据流与后端继续拆分后再选择下一切片。
