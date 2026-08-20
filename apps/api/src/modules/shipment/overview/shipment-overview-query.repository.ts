@@ -4,8 +4,14 @@ import type { PermissionKey, Principal, RoleKey } from '../../rbac.js';
 export const SHIPMENT_OVERVIEW_QUERY_REPOSITORY = 'SHIPMENT_OVERVIEW_QUERY_REPOSITORY';
 
 export interface ShipmentOverviewQueryOptions {
+  exposeWarehouseRouting?: boolean;
+  salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY';
+  customerServiceFieldScope?: boolean;
+  customerServiceTransferAgentWeight?: boolean;
   routeCostScope?: 'ROUTED';
+  includeLinePoolFinanceSummary?: boolean;
   marketSiteScope?: boolean;
+  customerServiceScope?: boolean;
 }
 
 export type ShipmentOverviewRow = Shipment;

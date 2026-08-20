@@ -398,3 +398,5 @@ export type PermissionKey =
   | `misc-fee:${string}`
   | `master-data:${string}`
   | `system:${string}`;
+
+export { hasEffectivePricingCapability } from './pricing-capabilities.js';
