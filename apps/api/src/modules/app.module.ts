@@ -89,6 +89,8 @@ import { SHIPMENT_BUSINESS_INVOICE_REPOSITORY } from './shipment/invoice/shipmen
 import { ShipmentBusinessInvoiceService } from './shipment/invoice/shipment-business-invoice.service.js';
 import { OrderEntryQueryController } from './shipment/order-entry/order-entry-query.controller.js';
 import { ShipmentOverviewQueryController } from './shipment/overview/shipment-overview-query.controller.js';
+import { SHIPMENT_OVERVIEW_QUERY_REPOSITORY } from './shipment/overview/shipment-overview-query.repository.js';
+import { ShipmentOverviewQueryService } from './shipment/overview/shipment-overview-query.service.js';
 import { SystemDirectoryController } from './system/directory/system-directory.controller.js';
 import { LegacySystemDirectoryRepository } from './system/directory/legacy-system-directory.repository.js';
 import {
@@ -256,6 +258,11 @@ const shipmentBusinessInvoiceRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const shipmentOverviewQueryRepositoryProvider = {
+  provide: SHIPMENT_OVERVIEW_QUERY_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -411,6 +418,8 @@ const systemIdentityAdminRepositoryProvider = {
     ShipmentBusinessInvoiceService,
     ShipmentBusinessInvoiceFileStorage,
     shipmentBusinessInvoiceRepositoryProvider,
+    ShipmentOverviewQueryService,
+    shipmentOverviewQueryRepositoryProvider,
     WarehouseMachineImportService,
     warehouseMachineImportRepositoryProvider,
     MojiaMeasurementService,

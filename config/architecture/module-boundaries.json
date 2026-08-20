@@ -206,6 +206,71 @@
           ]
         }
       ]
+    },
+    {
+      "name": "shipment-overview-query-slice",
+      "status": "transitional-query-boundary",
+      "files": [
+        {
+          "path": "apps/api/src/modules/shipment/overview/shipment-overview-query.controller.ts",
+          "requiredImports": [
+            "./shipment-overview-query.service.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.repository.js",
+            "../../prisma.service.js",
+            "./shipment-overview-query.repository.js",
+            "./shipment-overview-query.policy.js"
+          ],
+          "forbiddenText": [
+            "this.repository"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/shipment/overview/shipment-overview-query.service.ts",
+          "requiredImports": [
+            "./shipment-overview-query.repository.js",
+            "./shipment-overview-query.policy.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.repository.js",
+            "../../prisma.service.js",
+            "./shipment-overview-query.controller.js"
+          ],
+          "forbiddenText": [
+            "this.prisma"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/shipment/overview/shipment-overview-query.policy.ts",
+          "requiredImports": [
+            "./shipment-overview-query.repository.js"
+          ],
+          "forbiddenImports": [
+            "@nestjs/common",
+            "../../prisma.repository.js",
+            "../../prisma.service.js",
+            "./shipment-overview-query.controller.js",
+            "./shipment-overview-query.service.js"
+          ],
+          "forbiddenText": [
+            "this.prisma",
+            "this.repository"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/shipment/overview/shipment-overview-query.repository.ts",
+          "requiredImports": [
+            "../../prisma.repository.js"
+          ],
+          "forbiddenImports": [
+            "@nestjs/common",
+            "../../prisma.service.js",
+            "./shipment-overview-query.controller.js",
+            "./shipment-overview-query.service.js"
+          ]
+        }
+      ]
     }
   ]
 }

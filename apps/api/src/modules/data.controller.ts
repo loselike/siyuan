@@ -106,7 +106,6 @@ import type {
   ShipmentReviewBasicUpdateInput,
   ShipmentReviewDeleteInput,
   ShipmentReviewRejectInput,
-  Shipment,
   MasterDataSnapshot,
   NavigationReadStateInput
 } from '@siyuan/shared';
@@ -116,6 +115,10 @@ import { buildMasterDataSnapshotSelection, hasSalesOwnDataScope } from './master
 import { sanitizePricingChannelRequirement } from './pricing-excel.js';
 import { RequireAllPermissions, RequireAuth, RequirePermission } from './require-permission.decorator.js';
 import { isAdministratorRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
+import {
+  projectMarketRoutingReportShipment,
+  projectMarketShipment
+} from './shipment/overview/shipment-overview-query.policy.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
 const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -146,176 +149,6 @@ export class DataController {
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
     'application/octet-stream': ''
   };
-
-  private projectMarketShipment(shipment: Shipment, includeRouteCost = false): Partial<Shipment> & Pick<Shipment, 'id' | 'status' | 'createdAt'> {
-    return {
-      id: shipment.id,
-      createdAt: shipment.createdAt,
-      entryAt: shipment.entryAt,
-      customerName: shipment.customerName,
-      customerId: shipment.customerId,
-      customerCode: shipment.customerCode,
-      salesperson: shipment.salesperson,
-      customerOrderNo: shipment.customerOrderNo,
-      outboundOrderNo: shipment.outboundOrderNo,
-      systemOrderNo: shipment.systemOrderNo,
-      transferNo: shipment.transferNo,
-      subOrderNo: shipment.subOrderNo,
-      outboundAt: shipment.outboundAt,
-      productName: shipment.productName,
-      declarationRequired: shipment.declarationRequired,
-      sensitive: shipment.sensitive,
-      cargoType: shipment.cargoType,
-      volumeCbm: shipment.volumeCbm,
-      actualWeightKg: shipment.actualWeightKg,
-      weightKg: shipment.weightKg,
-      cargoDataSource: shipment.cargoDataSource,
-      chargeWeightOverridden: shipment.chargeWeightOverridden,
-      businessReviewedAt: shipment.businessReviewedAt,
-      reviewedAt: shipment.reviewedAt,
-      etaAt: shipment.etaAt,
-      etdAt: shipment.etdAt,
-      businessType: shipment.businessType,
-      packageType: shipment.packageType,
-      destinationCountry: shipment.destinationCountry,
-      carrier: shipment.carrier,
-      packageCount: shipment.packageCount,
-      receivableWeightKg: shipment.receivableWeightKg,
-      latestTracking: shipment.latestTracking,
-      latestTrackingUpdatedAt: shipment.latestTrackingUpdatedAt,
-      trackingStaleDays: shipment.trackingStaleDays,
-      isRemoteArea: shipment.isRemoteArea,
-      status: shipment.status,
-      channelId: shipment.channelId,
-      channelName: shipment.channelName,
-      agentId: shipment.agentId,
-      agentName: shipment.agentName,
-      routedAt: shipment.routedAt,
-      routeReturnedAt: shipment.routeReturnedAt,
-      routeAgentChannelName: shipment.routeAgentChannelName,
-      ...(includeRouteCost ? {
-        routeChargeWeightKg: shipment.routeChargeWeightKg,
-        routeUnitPrice: shipment.routeUnitPrice,
-        routeOtherFee: shipment.routeOtherFee,
-        routeCostTotal: shipment.routeCostTotal,
-        routeCurrency: shipment.routeCurrency,
-        routeCostSummary: shipment.routeCostSummary
-      } : {}),
-      agentReplacementCount: shipment.agentReplacementCount,
-      agentChangeRequest: shipment.agentChangeRequest,
-      warehouseOutboundRemark: shipment.warehouseOutboundRemark,
-      shippingMarkRequired: shipment.shippingMarkRequired,
-      hasProblemTicket: shipment.hasProblemTicket,
-      site: shipment.site
-    };
-  }
-
-  private projectMarketRoutingReportShipment(shipment: Shipment): Partial<Shipment> & Pick<Shipment, 'id' | 'status' | 'createdAt'> {
-    const projected = this.projectMarketShipment(shipment, true);
-    return {
-      id: projected.id,
-      createdAt: projected.createdAt,
-      customerName: projected.customerName,
-      customerCode: projected.customerCode,
-      salesperson: projected.salesperson,
-      customerOrderNo: '',
-      systemOrderNo: projected.systemOrderNo,
-      transferNo: projected.transferNo,
-      outboundAt: projected.outboundAt,
-      declarationRequired: projected.declarationRequired,
-      sensitive: projected.sensitive,
-      businessType: projected.businessType,
-      packageType: projected.packageType,
-      destinationCountry: projected.destinationCountry,
-      carrier: projected.carrier,
-      packageCount: projected.packageCount,
-      receivableWeightKg: projected.receivableWeightKg,
-      latestTracking: '',
-      trackingStaleDays: 0,
-      isRemoteArea: false,
-      status: projected.status,
-      channelName: projected.channelName,
-      agentName: projected.agentName,
-      routedAt: projected.routedAt,
-      routeReturnedAt: projected.routeReturnedAt,
-      routeAgentChannelName: projected.routeAgentChannelName,
-      routeChargeWeightKg: projected.routeChargeWeightKg,
-      routeUnitPrice: projected.routeUnitPrice,
-      routeOtherFee: projected.routeOtherFee,
-      routeCostTotal: projected.routeCostTotal,
-      routeCurrency: projected.routeCurrency,
-      routeCostSummary: projected.routeCostSummary,
-      hasProblemTicket: false,
-      site: projected.site
-    };
-  }
-
-  private async getMarketShipmentRows(
-    principal: Principal,
-    costScope?: string
-  ): Promise<Array<Partial<Shipment> & Pick<Shipment, 'id' | 'status' | 'createdAt'>>> {
-    const role = principal.role;
-    const [canViewDashboard, canViewPending, canViewRouted, canReroute, canReplaceAgent, canViewReport] = await Promise.all([
-      this.repository.hasPermission(role, 'market:dashboard:view'),
-      this.repository.hasPermission(role, 'market:pending-routing:view'),
-      this.repository.hasPermission(role, 'market:routed:view'),
-      this.repository.hasPermission(role, 'market:routed:reroute'),
-      this.repository.hasPermission(role, 'market:routed:replace-agent'),
-      this.repository.hasPermission(role, 'market:routing-report:view')
-    ]);
-    const rows = await this.repository.getShipments(principal, {
-      routeCostScope: costScope === 'routed' && (canViewRouted || canViewReport) ? 'ROUTED' : undefined,
-      marketSiteScope: true
-    });
-    const weekStart = new Date();
-    const weekDay = weekStart.getDay() || 7;
-    weekStart.setHours(0, 0, 0, 0);
-    weekStart.setDate(weekStart.getDate() - weekDay + 1);
-    const weekStartTime = weekStart.getTime();
-    const isCurrentWeek = (value?: string) => Boolean(value && new Date(value).getTime() >= weekStartTime);
-
-    return rows.flatMap((shipment) => {
-      const reportVisible = canViewReport && (
-        isCurrentWeek(shipment.routedAt)
-        || shipment.status === 'OUTBOUNDED'
-        || shipment.status === 'WAITING_DEPARTURE'
-      );
-      const detailVisible = (canViewPending && shipment.status === 'WAITING_SORT')
-        || (canViewRouted && shipment.status === 'WAITING_DISPATCH')
-        || (canViewRouted && canReroute && ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(shipment.status))
-        || (canViewRouted
-          && canReplaceAgent
-          && shipment.status === 'OUTBOUNDED'
-          && shipment.agentChangeRequest?.status === 'PENDING');
-      if (detailVisible) return [this.projectMarketShipment(shipment, true)];
-      if (reportVisible) return [this.projectMarketRoutingReportShipment(shipment)];
-      const dashboardVisible = canViewDashboard && (
-        shipment.status === 'WAITING_SORT'
-        || shipment.status === 'WAITING_DISPATCH'
-        || isCurrentWeek(shipment.routedAt)
-        || isCurrentWeek(shipment.outboundAt)
-        || isCurrentWeek(shipment.routeReturnedAt)
-      );
-      if (!dashboardVisible) return [];
-      return [{
-        id: shipment.id,
-        status: shipment.status,
-        createdAt: shipment.createdAt,
-        routedAt: shipment.routedAt,
-        outboundAt: shipment.outboundAt,
-        routeReturnedAt: shipment.routeReturnedAt,
-        agentName: shipment.agentName,
-        channelName: shipment.channelName,
-        sensitive: shipment.sensitive,
-        declarationRequired: shipment.declarationRequired,
-        customerName: '',
-        systemOrderNo: '',
-        destinationCountry: '',
-        packageCount: 0,
-        receivableWeightKg: 0
-      }];
-    });
-  }
 
   private sanitizePricingRequirementFields<T extends Pick<PriceLookupRecommendation, 'remark' | 'productSurchargeRemark' | 'specialRemark'>>(
     value: T,
@@ -591,7 +424,7 @@ export class DataController {
     const usesMarketPermission = !isAdministratorRole(request.user.role)
       && await this.repository.hasPermission(request.user.role, 'market:pending-routing:return-review');
     const result = await this.repository.reverseShipmentReview(request.user, id, body);
-    return usesMarketPermission ? { shipment: this.projectMarketShipment(result.shipment) } : result;
+    return usesMarketPermission ? { shipment: projectMarketShipment(result.shipment) } : result;
   }
 
   @Delete('shipments/:id/review')
@@ -623,34 +456,6 @@ export class DataController {
   async createShipment(@Req() request: { user: Principal }, @Body() body: ShipmentCreateInput) {
     if (request.user.role !== 'CUSTOMER') ensureInternalOrderEntryScope(request.user);
     return this.repository.createShipment(request.user, body);
-  }
-
-  @Get('shipments')
-  @RequirePermission([
-    'business:shipment:list',
-    'market:dashboard:view',
-    'market:pending-routing:view',
-    'market:routed:view',
-    'market:routing-report:view'
-  ])
-  async shipments(@Req() request: { user: Principal }, @Query('costScope') costScope?: string) {
-    const role = request.user.role;
-    const canViewBusinessShipments = await this.repository.hasPermission(role, 'business:shipment:list');
-    if (canViewBusinessShipments && role !== 'UG_MARKET') {
-      return this.repository.getShipments(request.user, { routeCostScope: costScope === 'routed' ? 'ROUTED' : undefined });
-    }
-    return this.getMarketShipmentRows(request.user, costScope);
-  }
-
-  @Get('market/shipments')
-  @RequirePermission([
-    'market:dashboard:view',
-    'market:pending-routing:view',
-    'market:routed:view',
-    'market:routing-report:view'
-  ])
-  async marketShipments(@Req() request: { user: Principal }, @Query('costScope') costScope?: string) {
-    return this.getMarketShipmentRows(request.user, costScope);
   }
 
   @Get('market/routing-options')
@@ -719,7 +524,7 @@ export class DataController {
     } else {
       await this.ensurePermission(request.user, 'market:pending-routing:approve');
     }
-    return this.projectMarketShipment(await this.repository.routeShipment(request.user, id, body), true);
+    return projectMarketShipment(await this.repository.routeShipment(request.user, id, body), true);
   }
 
   @Get('market/routing-report/rows')
@@ -736,13 +541,13 @@ export class DataController {
         || shipment.status === 'OUTBOUNDED'
         || shipment.status === 'WAITING_DEPARTURE'
       ))
-      .map((shipment) => this.projectMarketRoutingReportShipment(shipment));
+      .map((shipment) => projectMarketRoutingReportShipment(shipment));
   }
 
   @Post('shipments/:id/reroute')
   @RequirePermission('market:routed:reroute')
   async rerouteShipment(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentRerouteInput) {
-    return this.projectMarketShipment(await this.repository.rerouteShipment(request.user, id, body));
+    return projectMarketShipment(await this.repository.rerouteShipment(request.user, id, body));
   }
 
   @Get('shipments/:id/agent-replacement-preview')
@@ -761,7 +566,7 @@ export class DataController {
     @Param('id') id: string,
     @Body() body: ShipmentAgentReplacementInput
   ) {
-    return this.projectMarketShipment(await this.repository.replaceShipmentAgent(request.user, id, body));
+    return projectMarketShipment(await this.repository.replaceShipmentAgent(request.user, id, body));
   }
 
   @Post('shipments/:id/agent-change-request/:requestId/reject')
