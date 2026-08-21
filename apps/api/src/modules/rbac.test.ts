@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hasEffectivePricingCapability } from '@siyuan/shared';
-import { assertPermissionDefinitionsIntegrity, createPrincipalScopeFingerprint, defaultPermissionsForRole, normalizeRolePermissions, permissionDefinitions, type Principal } from './rbac.js';
+import { assertPermissionDefinitionsIntegrity, createPrincipalScopeFingerprint, defaultPermissionsForRole, getPermissionDefinitions, normalizeRolePermissions, permissionDefinitions, type Principal } from './rbac.js';
 
 const businessRoles = [
   'OPERATOR',
@@ -68,6 +68,46 @@ describe('RBAC default permission inheritance', () => {
       'finance:paid-payment:voucher-delete'
     ]));
     expect(paidPayments.some((permission) => permission.code.startsWith('finance:payable:paid-'))).toBe(false);
+  });
+
+  it('only exposes the three order-entry capabilities and retires legacy single-order fee grants', () => {
+    const assignableOrderEntryPermissions = getPermissionDefinitions()
+      .filter((permission) => permission.group === '业务管理 / 录单')
+      .map((permission) => permission.code);
+    const legacyOrderFeePermissions = [
+      'business:order-fee:view',
+      'business:order-fee:create',
+      'business:order-fee:update',
+      'business:order-fee:delete',
+      'business:order-fee:lock',
+      'business:order-fee:unlock',
+      'business:order-fee:profit-view'
+    ] as const;
+
+    expect(assignableOrderEntryPermissions).toEqual([
+      'business:order-entry:edit',
+      'business:order-entry:business-cost',
+      'business:order-entry:payable-fee'
+    ]);
+    for (const permission of legacyOrderFeePermissions) {
+      expect(defaultPermissionsForRole('OPERATOR')).not.toContain(permission);
+    }
+
+    const normalized = normalizeRolePermissions('UG_BUSINESS', [
+      'business:order-entry:edit',
+      'business:order-entry:business-cost',
+      'business:order-entry:payable-fee',
+      ...legacyOrderFeePermissions
+    ]);
+    expect(normalized).toEqual(expect.arrayContaining([
+      'business:order-entry:edit',
+      'business:order-entry:business-cost',
+      'business:order-entry:payable-fee',
+      'business:order-entry:view'
+    ]));
+    for (const permission of legacyOrderFeePermissions) {
+      expect(normalized).not.toContain(permission);
+    }
   });
 
   it.each(businessRoles)('keeps real agent and internal pricing data hidden from %s', (role) => {

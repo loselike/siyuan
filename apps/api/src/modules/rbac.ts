@@ -340,13 +340,13 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'business:order-entry:submit-review', label: '提交审核', group: '业务管理 / 录单', assignable: false },
   { code: 'business:order-entry:invoice-upload', label: '上传业务发票', group: '业务管理 / 录单', assignable: false },
   { code: 'business:order-entry:label-upload', label: '上传业务标签', group: '业务管理 / 录单', assignable: false },
-  { code: 'business:order-fee:view', label: '查看订单费用', group: '业务管理 / 录单' },
-  { code: 'business:order-fee:create', label: '新增订单费用', group: '业务管理 / 录单' },
-  { code: 'business:order-fee:update', label: '修改订单费用', group: '业务管理 / 录单' },
-  { code: 'business:order-fee:delete', label: '删除订单费用', group: '业务管理 / 录单' },
-  { code: 'business:order-fee:lock', label: '锁定订单费用', group: '业务管理 / 录单' },
-  { code: 'business:order-fee:unlock', label: '解锁订单费用', group: '业务管理 / 录单' },
-  { code: 'business:order-fee:profit-view', label: '查看订单利润', group: '业务管理 / 录单' },
+  { code: 'business:order-fee:view', label: '兼容：查看订单费用', group: '业务管理 / 录单', assignable: false },
+  { code: 'business:order-fee:create', label: '兼容：新增订单费用', group: '业务管理 / 录单', assignable: false },
+  { code: 'business:order-fee:update', label: '兼容：修改订单费用', group: '业务管理 / 录单', assignable: false },
+  { code: 'business:order-fee:delete', label: '兼容：删除订单费用', group: '业务管理 / 录单', assignable: false },
+  { code: 'business:order-fee:lock', label: '兼容：锁定订单费用', group: '业务管理 / 录单', assignable: false },
+  { code: 'business:order-fee:unlock', label: '兼容：解锁订单费用', group: '业务管理 / 录单', assignable: false },
+  { code: 'business:order-fee:profit-view', label: '兼容：查看订单利润', group: '业务管理 / 录单', assignable: false },
   { code: 'business:review:view', label: '查看', group: '业务管理 / 待审核运单' },
   { code: 'business:review:edit', label: '编辑', group: '业务管理 / 待审核运单' },
   { code: 'business:shipment:list', label: '查看运单管理列表', group: '业务管理 / 运单管理' },
@@ -806,7 +806,7 @@ const lineShipmentStageEditPermissions: PermissionKey[] = [
 export const rolePermissions: Record<BuiltinRoleKey, PermissionKey[]> = {
   ADMIN: allRuntimePermissions(),
   CUSTOMER_SERVICE: [...pricingLookupBusinessPermissions, ...masterDataReferencePermissions, 'tracking:external:view', 'tracking:external:detail', ...customerServiceBasePermissions],
-  OPERATOR: [...pricingLookupBusinessPermissions, ...lineShipmentStageEditPermissions, 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'finance:water-receipt:create', 'finance:water-receipt:update', 'finance:water-receipt:voucher-view', 'finance:water-receipt:voucher-upload', 'finance:water-receipt:voucher-delete', 'finance:water-match:read', ...businessMasterDataReferencePermissions, 'operations:line-shipment:view', 'operations:line-shipment:detail', 'operations:line-shipment:process', 'operations:line-shipment:status-update', 'operations:line-shipment:tracking-add', 'operations:line-shipment:problem-create', 'operations:line-shipment:import', 'operations:line-shipment:internal-log-view', 'operations:ai-queue:view', 'operations:ai-queue:assist', 'operations:ai-queue:mark-read', 'operations:ai-queue:handle', 'operations:product-map:view', 'operations:product-map:route-view', 'operations:import-quality:view', 'operations:import-quality:upload', 'operations:import-quality:retry', 'operations:import-quality:error-detail-view', 'operations:import-quality:confirm', 'business:dashboard:view', 'business:dashboard:trend-view', 'business:dashboard:pending-review-summary', 'business:order-entry:view', 'business:order-entry:warehouse-package-select', 'business:order-entry:create', 'business:order-entry:draft-view', 'business:order-entry:draft-edit', 'business:order-entry:draft-delete', 'business:order-entry:submit-review', 'business:order-entry:invoice-upload', 'business:order-entry:label-upload', 'business:order-fee:view', 'business:order-fee:create', 'business:order-fee:update', 'business:order-fee:delete', 'business:review:view', 'business:review:edit', 'business:shipment:list', 'business:shipment:detail', 'business:shipment:self-view', 'business:shipment:update-basic', 'business:shipment:tracking-add', 'business:shipment:problem-create', 'business:order-ai:view', 'business:order-ai:assist', 'warehouse:in-stock:view'],
+  OPERATOR: [...pricingLookupBusinessPermissions, ...lineShipmentStageEditPermissions, 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'finance:water-receipt:create', 'finance:water-receipt:update', 'finance:water-receipt:voucher-view', 'finance:water-receipt:voucher-upload', 'finance:water-receipt:voucher-delete', 'finance:water-match:read', ...businessMasterDataReferencePermissions, 'operations:line-shipment:view', 'operations:line-shipment:detail', 'operations:line-shipment:process', 'operations:line-shipment:status-update', 'operations:line-shipment:tracking-add', 'operations:line-shipment:problem-create', 'operations:line-shipment:import', 'operations:line-shipment:internal-log-view', 'operations:ai-queue:view', 'operations:ai-queue:assist', 'operations:ai-queue:mark-read', 'operations:ai-queue:handle', 'operations:product-map:view', 'operations:product-map:route-view', 'operations:import-quality:view', 'operations:import-quality:upload', 'operations:import-quality:retry', 'operations:import-quality:error-detail-view', 'operations:import-quality:confirm', 'business:dashboard:view', 'business:dashboard:trend-view', 'business:dashboard:pending-review-summary', 'business:order-entry:view', 'business:order-entry:warehouse-package-select', 'business:order-entry:create', 'business:order-entry:draft-view', 'business:order-entry:draft-edit', 'business:order-entry:draft-delete', 'business:order-entry:submit-review', 'business:order-entry:invoice-upload', 'business:order-entry:label-upload', 'business:review:view', 'business:review:edit', 'business:shipment:list', 'business:shipment:detail', 'business:shipment:self-view', 'business:shipment:update-basic', 'business:shipment:tracking-add', 'business:shipment:problem-create', 'business:order-ai:view', 'business:order-ai:assist', 'warehouse:in-stock:view'],
   WAREHOUSE: ['operations:line-shipment:view', 'operations:line-shipment:detail', ...lineShipmentStageEditPermissions, ...warehouseBasePermissions],
   FINANCE: ['business:shipment:list', ...pricingLookupBusinessPermissions, ...financeFunctionPermissions, 'master-data:finance:read', 'master-data:payer-banks:read', 'master-data:payer-banks:create', 'master-data:payer-banks:update', 'master-data:payer-banks:delete', 'master-data:agents:read', 'master-data:exchange-rates:read'],
   CUSTOMER: [
@@ -824,9 +824,6 @@ export const rolePermissions: Record<BuiltinRoleKey, PermissionKey[]> = {
 
 rolePermissions.OPERATOR.push('warehouse:in-stock:import');
 rolePermissions.OPERATOR.push(...miscFeeBusinessPermissions);
-// Owner/manager order-fee deletion is intentionally not a default capability;
-// existing approval/void workflows remain the supported deletion paths.
-rolePermissions.OPERATOR = rolePermissions.OPERATOR.filter((permission) => permission !== 'business:order-fee:delete');
 rolePermissions.WAREHOUSE.push('data-scope:misc-fee-warehouse-site', ...miscFeeWarehousePermissions);
 rolePermissions.FINANCE.push('data-scope:misc-fee-all', ...miscFeeAllPermissions);
 
@@ -1411,17 +1408,6 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
   if (normalized.includes('finance:paid-payment:voucher-delete')
     && !normalized.includes('finance:paid-payment:voucher-view')) {
     normalized.push('finance:paid-payment:voucher-view');
-  }
-  const orderFeeViewDependencies: Array<[PermissionKey, PermissionKey]> = [
-    ['business:order-fee:create', 'business:order-fee:view'],
-    ['business:order-fee:update', 'business:order-fee:view'],
-    ['business:order-fee:delete', 'business:order-fee:view'],
-    ['business:order-fee:lock', 'business:order-fee:view'],
-    ['business:order-fee:unlock', 'business:order-fee:view'],
-    ['business:order-fee:profit-view', 'business:order-fee:view']
-  ];
-  for (const [action, view] of orderFeeViewDependencies) {
-    if (normalized.includes(action) && !normalized.includes(view)) normalized.push(view);
   }
   if (normalized.includes('finance:order-fee:payable:manage')
     && !normalized.includes('finance:order-fee:payable:view')) {

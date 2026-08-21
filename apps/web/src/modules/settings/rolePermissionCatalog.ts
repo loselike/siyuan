@@ -99,34 +99,6 @@ export const orderEntryPermissionControls: Array<{
   }
 ];
 
-export const orderFeePermissionControls: Array<{ label: string; code: PermissionKey }> = [
-  { label: '查看费用', code: 'business:order-fee:view' },
-  { label: '新增费用', code: 'business:order-fee:create' },
-  { label: '修改费用', code: 'business:order-fee:update' },
-  { label: '删除费用', code: 'business:order-fee:delete' },
-  { label: '锁定费用', code: 'business:order-fee:lock' },
-  { label: '解锁费用', code: 'business:order-fee:unlock' },
-  { label: '查看利润', code: 'business:order-fee:profit-view' }
-];
-
-export function updateOrderFeePermission(
-  grantedPermissions: PermissionKey[],
-  code: PermissionKey,
-  checked: boolean
-): PermissionKey[] {
-  const next = new Set(grantedPermissions);
-  if (checked) {
-    next.add(code);
-    next.add('business:order-fee:view');
-  } else {
-    next.delete(code);
-    if (code === 'business:order-fee:view') {
-      orderFeePermissionControls.forEach((control) => next.delete(control.code));
-    }
-  }
-  return [...next];
-}
-
 export function isOrderEntryPermission(code: string): boolean {
   return orderEntryPermissionControls.some((control) => control.code === code);
 }

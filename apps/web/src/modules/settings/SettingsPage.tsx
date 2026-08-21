@@ -38,7 +38,6 @@ import {
   pricingMarkupPermissionControls,
   pricingMarkupPermissionCode,
   orderEntryPermissionControls,
-  orderFeePermissionControls,
   orderEntryDraftPermissionControls,
   pendingReviewPermissionControls,
   customerServiceDataConfirmPermissionControls,
@@ -46,7 +45,6 @@ import {
   customerServiceTransferPermissionControls,
   customerServiceViewPermissionFor,
   updateGlobalFieldMaskPermissions,
-  updateOrderFeePermission,
   type PermissionWorkspaceKey
 } from './rolePermissionCatalog';
 
@@ -776,10 +774,6 @@ export function SettingsPage({
     const granted = new Set(selectedRoleGrantedPermissions);
     return orderEntryPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
   }, [selectedRoleGrantedPermissions]);
-  const selectedOrderFeePermissionStates = useMemo(() => {
-    const granted = new Set(selectedRoleGrantedPermissions);
-    return orderFeePermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
   const selectedOrderEntryDraftPermissionStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
     return orderEntryDraftPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
@@ -1114,17 +1108,6 @@ export function SettingsPage({
       }
       return { ...current, [roleKey]: [...next] };
     });
-  }
-
-  function toggleOrderFeePermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
-    setDraftPermissions((current) => ({
-      ...current,
-      [roleKey]: updateOrderFeePermission(
-        current[roleKey] ?? selectedPermissionRole?.permissions ?? [],
-        code,
-        checked
-      )
-    }));
   }
 
   function shouldKeepCustomerServiceException(permission: PermissionKey, parentCode: PermissionKey) {
@@ -2587,26 +2570,6 @@ export function SettingsPage({
                                 aria-label={`分配录单${control.label}`}
                                 checked={control.checked}
                                 onChange={(event) => toggleOrderEntryPermission(selectedPermissionRole.key, control.code, event.target.checked)}
-                              />
-                            </label>
-                          ))}
-                        </div>
-                        <div className="role-permission-section-heading">
-                          <Text strong>单票费用授权</Text>
-                          <Tag color={selectedOrderFeePermissionStates.some((control) => control.checked) ? 'blue' : 'orange'}>
-                            {selectedOrderFeePermissionStates.filter((control) => control.checked).length}/{selectedOrderFeePermissionStates.length} 已授权
-                          </Tag>
-                        </div>
-                        <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedOrderFeePermissionStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
-                              <span className="role-permission-option-copy role-permission-compact-copy">
-                                <Text strong>{control.label}</Text>
-                              </span>
-                              <Checkbox
-                                aria-label={`分配单票费用${control.label}`}
-                                checked={control.checked}
-                                onChange={(event) => toggleOrderFeePermission(selectedPermissionRole.key, control.code, event.target.checked)}
                               />
                             </label>
                           ))}
