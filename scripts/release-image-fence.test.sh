@@ -38,6 +38,8 @@ grep -q 'docker compose up -d --no-build --pull never --remove-orphans' "$SCRIPT
 grep -q 'REMOTE_SERVER_BUILD_POLICY_VIOLATION' "$SCRIPT_DIR/deploy-47.sh"
 grep -q 'API_IMAGE_REFRESH_REQUIRED=true' "$SCRIPT_DIR/deploy-47.sh"
 grep -q 'siyuan_47_capture_release_image_ids "\$API_IMAGE_REFRESH_REQUIRED"' "$SCRIPT_DIR/deploy-47.sh"
+grep -q 'siyuan_47_warm_replace_api "\$RELEASE_LOCK_TOKEN"' "$SCRIPT_DIR/deploy-47.sh"
+bash "$SCRIPT_DIR/release-api-warm-handoff.test.sh"
 bash "$SCRIPT_DIR/release-service-plan.test.sh"
 bash "$SCRIPT_DIR/release-build-policy.test.sh"
 grep -q 'APPROVED_MIGRATIONS_ARG=.*__SIYUAN_EMPTY__' "$SCRIPT_DIR/deploy-47-whitelist.sh"

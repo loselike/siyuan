@@ -780,6 +780,8 @@ source scripts/lib/47-release-images.sh
 source scripts/lib/47-release-ssh.sh
 # shellcheck source=lib/47-release-service-plan.sh
 source scripts/lib/47-release-service-plan.sh
+# shellcheck source=lib/47-api-warm-handoff.sh
+source scripts/lib/47-api-warm-handoff.sh
 API_IMAGE_REFRESH_REQUIRED=false
 siyuan_47_api_image_refresh_required "$WEB_CHANGED" "$API_CHANGED" && API_IMAGE_REFRESH_REQUIRED=true
 actual_lock_token="$(sed -n '1p' "$RELEASE_LOCK_DIR/token" 2>/dev/null || true)"
@@ -844,11 +846,14 @@ done < <(siyuan_47_plan_restart_services "$WEB_CHANGED" "$API_CHANGED")
 if ((${#restart_services[@]})); then
   siyuan_47_record_release_phase restart-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
   siyuan_47_verify_release_image_ids "$API_IMAGE_REFRESH_REQUIRED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
-  # Every selected service was already built or pulled above.  --no-build
-  # prevents Compose from trying the registry (and then rebuilding a cached
-  # unchanged service) during restart, while preserving the unified release
-  # ID and the image-fence checks above.
-  docker compose up -d --no-build --pull never --remove-orphans "${restart_services[@]}"
+  if [[ "$API_IMAGE_REFRESH_REQUIRED" == true ]]; then
+    siyuan_47_warm_replace_api "$RELEASE_LOCK_TOKEN"
+  fi
+  if [[ "$WEB_CHANGED" == true ]]; then
+    # The warm API candidate has already been removed. Recreate Web last so the
+    # existing proxy keeps serving the candidate throughout the API handoff.
+    docker compose up -d --no-build --pull never --remove-orphans web
+  fi
   siyuan_47_record_release_phase restart-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
 fi
 

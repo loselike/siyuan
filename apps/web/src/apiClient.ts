@@ -318,6 +318,7 @@ import { MarkupQueryClient } from './api/markupQueryClient';
 import { PriceBookQueryClient } from './api/priceBookQueryClient';
 import { SystemDirectoryClient } from './api/systemDirectoryClient';
 import { WarehouseQueryClient } from './api/warehouseQueryClient';
+import { fetchWithReadAvailabilityRetry } from './apiTransport';
 
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type RoleKey = BuiltinRoleKey | (string & {});
@@ -2404,7 +2405,7 @@ export class ApiClient {
 
     let response: Response;
     try {
-      response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+      response = await fetchWithReadAvailabilityRetry(`${API_BASE}${path}`, { ...init, headers });
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {

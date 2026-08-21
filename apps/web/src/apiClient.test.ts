@@ -10,7 +10,7 @@ describe('ApiClient gateway errors', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html><title>502 Bad Gateway</title></html>', { status: 502 })));
     const client = new ApiClient(() => null, vi.fn());
 
-    await expect(client.shipments()).rejects.toThrow('服务暂不可用，请稍后重试');
+    await expect(client.login('operator', 'password')).rejects.toThrow('服务暂不可用，请稍后重试');
   });
 
   it('keeps anonymous auth requests and authenticated session requests unchanged through the facade', async () => {
