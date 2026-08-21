@@ -31,6 +31,8 @@ const requiredGovernanceFiles = [
   'config/validation/path-test-map.json',
   'scripts/lib/docker-container-image-id.sh',
   'scripts/lib/47-release-images.sh',
+  'scripts/lib/47-api-warm-handoff.sh',
+  'scripts/release-api-warm-handoff.test.sh',
   'scripts/release-image-fence.test.sh',
   'scripts/docker-container-image-id.test.sh',
   'scripts/release-fingerprint-artifact-filter.test.sh',
