@@ -22,6 +22,7 @@ export const legacyPricingModules: Array<{ key: LegacyPricingModule; label: stri
   { key: 'amazon', label: '亚马逊查询' },
   { key: 'inquiry', label: '欧洲超大件综合查询' },
   { key: 'europeExpress', label: '欧洲空海运铁路快递查询' },
+  { key: 'ukExpress', label: '英国空海运铁路快递查询' },
   { key: 'southAfrica', label: '南非专线查询' },
   { key: 'usaAirSea', label: '美国空海运查询' },
   { key: 'canadaAirSea', label: '加拿大空海查询' },
@@ -32,6 +33,7 @@ export const lookupPermissionByModule: Record<LegacyPricingModule, PermissionKey
   amazon: 'pricing:lookup:amazon',
   inquiry: 'pricing:lookup:europe-oversize',
   europeExpress: 'pricing:lookup:europe-express',
+  ukExpress: 'pricing:lookup:uk-express',
   southAfrica: 'pricing:lookup:south-africa',
   usaAirSea: 'pricing:lookup:usa-air-sea',
   canadaAirSea: 'pricing:lookup:canada-air-sea',
@@ -42,6 +44,10 @@ export const priceBookImportModules: Array<{ key: PriceBookImportTargetModule; l
 
 export function isAirSeaPricingModule(module: LegacyPricingModule) {
   return module === 'usaAirSea' || module === 'canadaAirSea' || module === 'dubaiAirSea';
+}
+
+export function isEuropeExpressPricingModule(module: LegacyPricingModule) {
+  return module === 'europeExpress' || module === 'ukExpress';
 }
 
 const markupDestinationNames = [
@@ -194,6 +200,17 @@ export const legacyModuleDefaults: Record<LegacyPricingModule, Partial<LegacyLoo
   },
   europeExpress: {
     destinationCountry: '法国',
+    postalCode: undefined,
+    channel: '',
+    taxInclusion: undefined,
+    agentName: undefined,
+    productName: undefined,
+    packageInfo: '',
+    packageCount: 1,
+    chargeableWeightKg: undefined
+  },
+  ukExpress: {
+    destinationCountry: '英国',
     postalCode: undefined,
     channel: '',
     taxInclusion: undefined,

@@ -1,9 +1,10 @@
-export type PricingModuleKey = 'amazon' | 'inquiry' | 'europeExpress' | 'southAfrica' | 'usaAirSea' | 'canadaAirSea' | 'dubaiAirSea';
+export type PricingModuleKey = 'amazon' | 'inquiry' | 'europeExpress' | 'ukExpress' | 'southAfrica' | 'usaAirSea' | 'canadaAirSea' | 'dubaiAirSea';
 
 export const PRICING_MODULES = [
   { key: 'amazon', label: '亚马逊查询', lookupCode: 'pricing:lookup:amazon' },
   { key: 'inquiry', label: '欧洲超大件综合查询', lookupCode: 'pricing:lookup:europe-oversize' },
   { key: 'europeExpress', label: '欧洲空海运铁路快递查询', lookupCode: 'pricing:lookup:europe-express' },
+  { key: 'ukExpress', label: '英国空海运铁路快递查询', lookupCode: 'pricing:lookup:uk-express' },
   { key: 'southAfrica', label: '南非专线查询', lookupCode: 'pricing:lookup:south-africa' },
   { key: 'usaAirSea', label: '美国空海运查询', lookupCode: 'pricing:lookup:usa-air-sea' },
   { key: 'canadaAirSea', label: '加拿大空海查询', lookupCode: 'pricing:lookup:canada-air-sea' },

@@ -57,6 +57,7 @@ export class PriceBookQueryController {
     'pricing:markup:amazon:view',
     'pricing:markup:inquiry:view',
     'pricing:markup:europeExpress:view',
+    'pricing:markup:ukExpress:view',
     'pricing:markup:southAfrica:view',
     'pricing:markup:usaAirSea:view',
     'pricing:markup:canadaAirSea:view',
@@ -71,6 +72,7 @@ export class PriceBookQueryController {
     'pricing:markup:amazon:view',
     'pricing:markup:inquiry:view',
     'pricing:markup:europeExpress:view',
+    'pricing:markup:ukExpress:view',
     'pricing:markup:southAfrica:view',
     'pricing:markup:usaAirSea:view',
     'pricing:markup:canadaAirSea:view',
@@ -119,7 +121,7 @@ export class PriceBookQueryController {
   }
 
   @Get('pricing/legacy/quote-meta')
-  @RequirePermission(['pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea'])
+  @RequirePermission(['pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:uk-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea'])
   async legacyPricingMeta(@Req() request: { user: Principal }) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能访问内部查价');

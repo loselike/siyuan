@@ -126,6 +126,7 @@ const pricingLookupPermissionByModule: Record<LegacyPricingModule, PermissionKey
   amazon: 'pricing:lookup:amazon',
   inquiry: 'pricing:lookup:europe-oversize',
   europeExpress: 'pricing:lookup:europe-express',
+  ukExpress: 'pricing:lookup:uk-express',
   southAfrica: 'pricing:lookup:south-africa',
   usaAirSea: 'pricing:lookup:usa-air-sea',
   canadaAirSea: 'pricing:lookup:canada-air-sea',
@@ -1121,7 +1122,7 @@ export class DataController {
   }
 
   @Post('pricing/quote')
-  @RequireAllPermissions('pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea')
+  @RequireAllPermissions('pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:uk-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea')
   quote(@Req() request: { user: Principal }, @Body() body: PricingQuoteRequest) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能访问内部查价');
@@ -1136,7 +1137,7 @@ export class DataController {
   }
 
   @Post('pricing/lookup')
-  @RequirePermission(['pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea'])
+  @RequirePermission(['pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:uk-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea'])
   async priceLookup(@Req() request: { user: Principal }, @Body() body: PriceLookupRequest) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能访问内部查价');
@@ -1175,6 +1176,13 @@ export class DataController {
   @RequirePermission('pricing:lookup:europe-express')
   async legacyEuropeExpressQuote(@Req() request: { user: Principal }, @Body() body: Omit<LegacyPricingQuoteRequest, 'module'>) {
     const [response, agentNames] = await Promise.all([this.repository.quoteLegacyPricing(request.user, { ...body, module: 'europeExpress' }), this.repository.getPricingAgentNames()]);
+    return this.sanitizeLegacyPricingQuoteResponse(response, agentNames);
+  }
+
+  @Post('pricing/legacy/uk-express/quote')
+  @RequirePermission('pricing:lookup:uk-express')
+  async legacyUkExpressQuote(@Req() request: { user: Principal }, @Body() body: Omit<LegacyPricingQuoteRequest, 'module'>) {
+    const [response, agentNames] = await Promise.all([this.repository.quoteLegacyPricing(request.user, { ...body, module: 'ukExpress' }), this.repository.getPricingAgentNames()]);
     return this.sanitizeLegacyPricingQuoteResponse(response, agentNames);
   }
 
@@ -1358,73 +1366,73 @@ export class DataController {
   }
 
   @Post('pricing/markup-rules/import')
-  @RequirePermission(['pricing:markup:amazon:import', 'pricing:markup:inquiry:import', 'pricing:markup:europeExpress:import', 'pricing:markup:southAfrica:import', 'pricing:markup:usaAirSea:import', 'pricing:markup:canadaAirSea:import', 'pricing:markup:dubaiAirSea:import'])
+  @RequirePermission(['pricing:markup:amazon:import', 'pricing:markup:inquiry:import', 'pricing:markup:europeExpress:import', 'pricing:markup:ukExpress:import', 'pricing:markup:southAfrica:import', 'pricing:markup:usaAirSea:import', 'pricing:markup:canadaAirSea:import', 'pricing:markup:dubaiAirSea:import'])
   async importAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { rows?: AgentMarkupCreateInput[] }) {
     return this.repository.importAgentMarkupRules(request.user, body);
   }
 
   @Post('pricing/markup-rules/batch-upsert')
-  @RequirePermission(['pricing:markup:amazon:import', 'pricing:markup:inquiry:import', 'pricing:markup:europeExpress:import', 'pricing:markup:southAfrica:import', 'pricing:markup:usaAirSea:import', 'pricing:markup:canadaAirSea:import', 'pricing:markup:dubaiAirSea:import'])
+  @RequirePermission(['pricing:markup:amazon:import', 'pricing:markup:inquiry:import', 'pricing:markup:europeExpress:import', 'pricing:markup:ukExpress:import', 'pricing:markup:southAfrica:import', 'pricing:markup:usaAirSea:import', 'pricing:markup:canadaAirSea:import', 'pricing:markup:dubaiAirSea:import'])
   async batchUpsertAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { rows?: AgentMarkupCreateInput[] }) {
     return this.repository.batchUpsertAgentMarkupRules(request.user, body);
   }
 
   @Post('pricing/markup-rules/batch-status')
-  @RequirePermission(['pricing:markup:amazon:status', 'pricing:markup:inquiry:status', 'pricing:markup:europeExpress:status', 'pricing:markup:southAfrica:status', 'pricing:markup:usaAirSea:status', 'pricing:markup:canadaAirSea:status', 'pricing:markup:dubaiAirSea:status'])
+  @RequirePermission(['pricing:markup:amazon:status', 'pricing:markup:inquiry:status', 'pricing:markup:europeExpress:status', 'pricing:markup:ukExpress:status', 'pricing:markup:southAfrica:status', 'pricing:markup:usaAirSea:status', 'pricing:markup:canadaAirSea:status', 'pricing:markup:dubaiAirSea:status'])
   async batchUpdateAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { ids?: string[]; agentNames?: string[]; scopes?: Array<{ agentName?: string; priceBookId?: string; legacyModule?: LegacyPricingModule }>; enabled?: boolean }) {
     return this.repository.batchUpdateAgentMarkupRules(request.user, body);
   }
 
   @Post('pricing/markup-rules/batch-delete')
-  @RequirePermission(['pricing:markup:amazon:delete', 'pricing:markup:inquiry:delete', 'pricing:markup:europeExpress:delete', 'pricing:markup:southAfrica:delete', 'pricing:markup:usaAirSea:delete', 'pricing:markup:canadaAirSea:delete', 'pricing:markup:dubaiAirSea:delete'])
+  @RequirePermission(['pricing:markup:amazon:delete', 'pricing:markup:inquiry:delete', 'pricing:markup:europeExpress:delete', 'pricing:markup:ukExpress:delete', 'pricing:markup:southAfrica:delete', 'pricing:markup:usaAirSea:delete', 'pricing:markup:canadaAirSea:delete', 'pricing:markup:dubaiAirSea:delete'])
   async batchDeleteAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { ids?: string[]; agentNames?: string[]; scopes?: Array<{ agentName?: string; priceBookId?: string; legacyModule?: LegacyPricingModule }> }) {
     return this.repository.batchDeleteAgentMarkupRules(request.user, body);
   }
 
   @Post('pricing/markup-rules/route-preview')
-  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
+  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:ukExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
   async previewMarkupRoute(@Req() request: { user: Principal }, @Body() body: MarkupRoutePreviewInput) {
     return this.repository.previewMarkupRoute(request.user, body);
   }
 
   @Post('pricing/markup-rules/route-preview/batch')
-  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
+  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:ukExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
   async previewMarkupRoutesBatch(@Req() request: { user: Principal }, @Body() body: MarkupRoutePreviewBatchInput) {
     return this.repository.previewMarkupRoutesBatch(request.user, body);
   }
 
   @Post('pricing/markup-rules/route-tiers')
-  @RequirePermission(['pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier'])
+  @RequirePermission(['pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:ukExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier'])
   async replaceMarkupRouteTiers(@Req() request: { user: Principal }, @Body() body: MarkupRouteTierReplaceInput) {
     return this.repository.replaceMarkupRouteTiers(request.user, body);
   }
 
   @Post('pricing/markup-rules/route-tiers/batch')
-  @RequirePermission(['pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier'])
+  @RequirePermission(['pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:ukExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier'])
   async replaceMarkupRouteTiersBatch(@Req() request: { user: Principal }, @Body() body: MarkupRouteTierBatchReplaceInput) {
     return this.repository.replaceMarkupRouteTiersBatch(request.user, body);
   }
 
   @Post('pricing/markup-rules/migrate-pricebook-scopes')
-  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
+  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:ukExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async migrateLegacyMarkupRouteScopes(@Req() request: { user: Principal }) {
     return this.repository.migrateLegacyMarkupRouteScopes(request.user);
   }
 
   @Post('pricing/markup-rules')
-  @RequirePermission(['pricing:markup:amazon:create', 'pricing:markup:inquiry:create', 'pricing:markup:europeExpress:create', 'pricing:markup:southAfrica:create', 'pricing:markup:usaAirSea:create', 'pricing:markup:canadaAirSea:create', 'pricing:markup:dubaiAirSea:create'])
+  @RequirePermission(['pricing:markup:amazon:create', 'pricing:markup:inquiry:create', 'pricing:markup:europeExpress:create', 'pricing:markup:ukExpress:create', 'pricing:markup:southAfrica:create', 'pricing:markup:usaAirSea:create', 'pricing:markup:canadaAirSea:create', 'pricing:markup:dubaiAirSea:create'])
   async createAgentMarkupRule(@Req() request: { user: Principal }, @Body() body: AgentMarkupCreateInput) {
     return this.repository.createAgentMarkupRule(request.user, body);
   }
 
   @Put('pricing/markup-rules/:id')
-  @RequirePermission(['pricing:markup:amazon:update', 'pricing:markup:inquiry:update', 'pricing:markup:europeExpress:update', 'pricing:markup:southAfrica:update', 'pricing:markup:usaAirSea:update', 'pricing:markup:canadaAirSea:update', 'pricing:markup:dubaiAirSea:update'])
+  @RequirePermission(['pricing:markup:amazon:update', 'pricing:markup:inquiry:update', 'pricing:markup:europeExpress:update', 'pricing:markup:ukExpress:update', 'pricing:markup:southAfrica:update', 'pricing:markup:usaAirSea:update', 'pricing:markup:canadaAirSea:update', 'pricing:markup:dubaiAirSea:update'])
   async updateAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: AgentMarkupUpdateInput) {
     return this.repository.updateAgentMarkupRule(request.user, id, body);
   }
 
   @Delete('pricing/markup-rules/:id')
-  @RequirePermission(['pricing:markup:amazon:delete', 'pricing:markup:inquiry:delete', 'pricing:markup:europeExpress:delete', 'pricing:markup:southAfrica:delete', 'pricing:markup:usaAirSea:delete', 'pricing:markup:canadaAirSea:delete', 'pricing:markup:dubaiAirSea:delete'])
+  @RequirePermission(['pricing:markup:amazon:delete', 'pricing:markup:inquiry:delete', 'pricing:markup:europeExpress:delete', 'pricing:markup:ukExpress:delete', 'pricing:markup:southAfrica:delete', 'pricing:markup:usaAirSea:delete', 'pricing:markup:canadaAirSea:delete', 'pricing:markup:dubaiAirSea:delete'])
   async deleteAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.deleteAgentMarkupRule(request.user, id);
   }
@@ -1494,13 +1502,13 @@ export class DataController {
   }
 
   @Post('pricing/rules')
-  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
+  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:ukExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async createPricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleCreateInput) {
     return this.repository.createPricingRule(request.user, body);
   }
 
   @Put('pricing/rules/:id/enabled')
-  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
+  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:ukExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async updatePricingRuleEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updatePricingRuleEnabled(request.user, id, body);
   }

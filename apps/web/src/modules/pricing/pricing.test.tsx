@@ -247,12 +247,13 @@ describe('Pricing flows', () => {
       'amazon',
       'inquiry',
       'europeExpress',
+      'ukExpress',
       'southAfrica',
       'usaAirSea',
       'canadaAirSea',
       'dubaiAirSea'
     ]);
-    expect(priceBookImportModules.map((item) => item.label)).toEqual(expect.arrayContaining(['美国空海运查询', '加拿大空海查询', '迪拜空海运查询']));
+    expect(priceBookImportModules.map((item) => item.label)).toEqual(expect.arrayContaining(['英国空海运铁路快递查询', '美国空海运查询', '加拿大空海查询', '迪拜空海运查询']));
   });
 
   it('迪拜空海运价格表按价格块继承渠道代码并保留展示字段', async () => {
@@ -827,6 +828,46 @@ describe('Pricing flows', () => {
     if (originalFetch) {
       fetchMock.mockImplementation(originalFetch);
     }
+  });
+
+  it('英国查询独立显示并固定提交英国目的地', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(fetch);
+    const originalFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/api/pricing/legacy/uk-express/quote')) {
+        const payload = JSON.parse(String(init?.body ?? '{}'));
+        return Promise.resolve(new Response(JSON.stringify({
+          module: 'ukExpress',
+          query: payload,
+          recommendations: [],
+          cheapestRecommendations: [],
+          fastestRecommendations: [],
+          selected: undefined,
+          agentErrors: [],
+          metrics: { matchedRows: 0, agents: 0, channels: 0, sources: 0 }
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      }
+      return originalFetch?.(input, init) ?? Promise.reject(new Error('unexpected fetch'));
+    });
+
+    await renderAndLogin('admin', 'admin123');
+    await user.click(screen.getByRole('menuitem', { name: '报价查价' }));
+    await user.click(await screen.findByRole('button', { name: '英国空海运铁路快递查询' }));
+
+    const destination = screen.getByLabelText('目的国家');
+    expect(destination).toHaveValue('英国');
+    expect(destination).toBeDisabled();
+    expect(document.querySelector('.pricing-calculator-grid-ukExpress')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '查价查询' }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/pricing/legacy/uk-express/quote')).at(-1);
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ destinationCountry: '英国' });
+    });
+
+    if (originalFetch) fetchMock.mockImplementation(originalFetch);
   });
 
   it('南非专线按面膜和体积自动报价，隐藏重量申报并展示完整报价表', async () => {

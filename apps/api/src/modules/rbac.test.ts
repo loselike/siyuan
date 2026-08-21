@@ -171,6 +171,9 @@ describe('RBAC default permission inheritance', () => {
     expect(codes).toEqual(expect.arrayContaining([
       'pricing:markup:amazon:view',
       'pricing:markup:amazon:edit',
+      'pricing:lookup:uk-express',
+      'pricing:markup:ukExpress:view',
+      'pricing:markup:ukExpress:edit',
       'pricing:markup:dubaiAirSea:view',
       'pricing:markup:dubaiAirSea:edit',
       'pricing:price-books:view',

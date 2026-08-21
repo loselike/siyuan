@@ -3814,6 +3814,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
         { key: 'amazon', label: '亚马逊查询', rowCount: rows.filter((row) => row.warehouseCode).length, sourceCount: importedPriceBooks.length },
         { key: 'inquiry', label: '欧洲海运超大件查询', rowCount: rows.length, sourceCount: importedPriceBooks.length },
         { key: 'europeExpress', label: '欧洲空海运铁路快递查询', rowCount: rows.length, sourceCount: importedPriceBooks.length },
+        { key: 'ukExpress', label: '英国空海运铁路快递查询', rowCount: rows.filter((row) => row.destinationCountry === '英国').length, sourceCount: importedPriceBooks.length },
         { key: 'southAfrica', label: '南非专线查询', rowCount: rows.filter((row) => row.destinationCountry === '南非').length, sourceCount: importedPriceBooks.length }
       ],
       agents: canViewInternalPricing ? [...new Set(rows.map((row) => row.agentName))] : [],
@@ -3823,12 +3824,12 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     });
   }
 
-  if (url.match(/\/api\/pricing\/legacy\/(amazon|inquiry|europe-express|south-africa)\/quote$/) && init?.method === 'POST') {
+  if (url.match(/\/api\/pricing\/legacy\/(amazon|inquiry|europe-express|uk-express|south-africa)\/quote$/) && init?.method === 'POST') {
     const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
     const canViewInternalPricing = testCanViewPricingInternalRoute(token);
     const chargeableWeightKg = Number(body.chargeableWeightKg);
-    const moduleKey: LegacyPricingModule = url.includes('/europe-express/') ? 'europeExpress' : url.includes('/south-africa/') ? 'southAfrica' : url.includes('/inquiry/') ? 'inquiry' : 'amazon';
-    const unitPreview = moduleKey === 'europeExpress' && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0);
+    const moduleKey: LegacyPricingModule = url.includes('/uk-express/') ? 'ukExpress' : url.includes('/europe-express/') ? 'europeExpress' : url.includes('/south-africa/') ? 'southAfrica' : url.includes('/inquiry/') ? 'inquiry' : 'amazon';
+    const unitPreview = (moduleKey === 'europeExpress' || moduleKey === 'ukExpress') && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0);
     const warehouseCode = String(body.amazonCode ?? '').trim().toUpperCase();
     const requestedWeightBand = moduleKey === 'amazon' ? testNormalizeAmazonWeightBand(body.weightBand ?? body.tier) : undefined;
     const requestedOrigin = moduleKey === 'amazon' ? testNormalizeAmazonOriginWarehouseName(body.origin) : undefined;
@@ -6470,6 +6471,8 @@ function buildTestLegacyModuleCounts(rows: PriceBookRowSummary[]) {
       ? 'amazon'
       : /南非|south africa|south-africa/.test(source)
         ? 'southAfrica'
+        : /英国|united kingdom|great britain|(?:^|\s)(?:uk|gb|gbr)(?:\s|$)/.test(source)
+          ? 'ukExpress'
         : !/超大件|大件/.test(source) && /空海运|铁路|快递|空运|空派|express|rail|air|fedex|dhl|ups/.test(source)
           ? 'europeExpress'
           : /超大件|海运|海卡|卡派|卡车|truck|oversize|大件/.test(source)

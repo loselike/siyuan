@@ -52,6 +52,7 @@ export function isLegacyPricingModule(value: unknown): value is LegacyPricingMod
   return value === 'amazon'
     || value === 'inquiry'
     || value === 'europeExpress'
+    || value === 'ukExpress'
     || value === 'southAfrica'
     || value === 'usaAirSea'
     || value === 'canadaAirSea'

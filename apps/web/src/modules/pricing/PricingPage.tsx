@@ -44,6 +44,7 @@ import {
   inferSouthAfricaMaterialCategory,
   isAirSeaPricingModule,
   isAmazonOriginOption,
+  isEuropeExpressPricingModule,
   isPostalCodeRequired,
   isTerminalImportJob,
   legacyModuleDefaults,
@@ -660,7 +661,7 @@ export function PricingPage({
   const canRunLookup = (() => {
     if (legacyModule === 'amazon') return Boolean(amazonCodeValue?.trim()) && (hasMeasureInput || Boolean(tierValue?.trim()));
     if (legacyModule === 'inquiry') return Boolean(destinationCountryValue?.trim()) && hasMeasureInput && (!postalRequired || Boolean(postalCodeValue?.trim()));
-    if (legacyModule === 'europeExpress') return Boolean(destinationCountryValue?.trim()) && (!postalRequired || Boolean(postalCodeValue?.trim()));
+    if (isEuropeExpressPricingModule(legacyModule)) return Boolean(destinationCountryValue?.trim()) && (!postalRequired || Boolean(postalCodeValue?.trim()));
     if (legacyModule === 'southAfrica') return Boolean(productNameValue?.trim()) && Number(volumeCbm ?? 0) > 0;
     if (legacyModule === 'usaAirSea') return Boolean(normalizeUsPostalCode(postalCodeValue)) && hasMeasureInput;
     if (legacyModule === 'canadaAirSea') {
@@ -677,7 +678,7 @@ export function PricingPage({
   const highlightedQuote = recommendedQuote;
   const legacyHasRecommendations = Boolean(legacyResult?.recommendations.length);
   const highlightedLegacyQuote = legacyResult?.selected ?? legacyResult?.cheapestRecommendations[0] ?? legacyResult?.recommendations[0] ?? null;
-  const legacyUnitPreview = legacyResult?.module === 'europeExpress' && Number(legacyResult.query.chargeableWeightKg ?? 0) <= 0;
+  const legacyUnitPreview = Boolean(legacyResult && isEuropeExpressPricingModule(legacyResult.module) && Number(legacyResult.query.chargeableWeightKg ?? 0) <= 0);
   const sortedLegacyRecommendations = useMemo(
     () => sortLegacyRecommendations(legacyResult?.recommendations ?? [], legacyRecommendationSort),
     [legacyRecommendationSort, legacyResult?.recommendations]
@@ -1845,7 +1846,7 @@ export function PricingPage({
         onNotice('亚马逊仓请填写至少三位仓库代码，例如 YYC 或 YYC1');
         return;
       }
-      if ((legacyModule === 'inquiry' || legacyModule === 'europeExpress') && !destinationCountry) {
+      if ((legacyModule === 'inquiry' || isEuropeExpressPricingModule(legacyModule)) && !destinationCountry) {
         onNotice('请先填写目的国家');
         return;
       }
@@ -1865,7 +1866,7 @@ export function PricingPage({
         onNotice('请先填写计费重量 KG 或体积 CBM');
         return;
       }
-      if ((legacyModule === 'inquiry' || legacyModule === 'europeExpress') && postalRequired && !postalCode) {
+      if ((legacyModule === 'inquiry' || isEuropeExpressPricingModule(legacyModule)) && postalRequired && !postalCode) {
         lookupForm.setFields([{ name: 'postalCode', errors: ['当前目的地需要填写邮编'] }]);
         onNotice('当前目的地需要填写邮编');
         return;
@@ -1978,7 +1979,7 @@ export function PricingPage({
   function resetLookupResult() {
     invalidatePricingResult();
     setLegacyRecommendationSort('price');
-    if (legacyModule === 'europeExpress') {
+    if (isEuropeExpressPricingModule(legacyModule)) {
       lookupForm.setFieldValue('channel', '');
     }
     onNotice('已清空报价结果，可重新查询');
@@ -2042,6 +2043,7 @@ export function PricingPage({
       amazon: { amazonCode: 1, actualWeightKg: 2, volumeCbm: 3, tier: 4, origin: 5, destinationCountry: 6, channel: 7 },
       inquiry: { productName: 1, cargoType: 2, destinationCountry: 3, postalCode: 4, address: 5, packageInfo: 6, channel: 7, actualWeightKg: 8, lengthCm: 9, widthCm: 10, heightCm: 11, packageCount: 12, unitActualWeightKg: 13, volumeCbm: 14 },
       europeExpress: { destinationCountry: 1, postalCode: 2, channel: 3, taxInclusion: 4, chargeableWeightKg: 5, volumeCbm: 6, lengthCm: 7, widthCm: 8, heightCm: 9, packageCount: 10, unitActualWeightKg: 11, productName: 12, packageInfo: 13 },
+      ukExpress: { destinationCountry: 1, postalCode: 2, channel: 3, taxInclusion: 4, chargeableWeightKg: 5, volumeCbm: 6, lengthCm: 7, widthCm: 8, heightCm: 9, packageCount: 10, unitActualWeightKg: 11, productName: 12, packageInfo: 13 },
       southAfrica: { productName: 1, tier: 2, volumeCbm: 3 },
       usaAirSea: { postalCode: 1, channel: 2, chargeableWeightKg: 3, volumeCbm: 4, lengthCm: 5, widthCm: 6, heightCm: 7, packageCount: 8, unitActualWeightKg: 9, productName: 10, packageInfo: 11 },
       canadaAirSea: { canadaAddressType: 1, amazonCode: 2, channel: 3, chargeableWeightKg: 4, volumeCbm: 5, lengthCm: 6, widthCm: 7, heightCm: 8, packageCount: 9, unitActualWeightKg: 10, productName: 11, packageInfo: 12 },
@@ -2191,17 +2193,25 @@ export function PricingPage({
       );
     }
 
-    if (legacyModule === 'europeExpress') {
+    if (isEuropeExpressPricingModule(legacyModule)) {
+      const isUnitedKingdom = legacyModule === 'ukExpress';
       return (
         <>
           <section className="pricing-form-block">
             <Text strong className="pricing-form-block-title">基础查询条件</Text>
             <div className="pricing-form-grid pricing-form-grid-express">
-              <Form.Item name="destinationCountry" label="目的国家" rules={[{ required: true, message: '请输入目的国家' }]}>
-                <Input tabIndex={lookupTabIndex('destinationCountry')} placeholder="法国" />
-              </Form.Item>
-              <Form.Item name="postalCode" label="邮编（意大利必填）" rules={postalRequired ? [{ required: true, message: '意大利分区报价需要邮编' }] : []}>
-                <Input tabIndex={lookupTabIndex('postalCode')} placeholder="如 20100" />
+              {isUnitedKingdom ? (
+                <>
+                  <Form.Item name="destinationCountry" hidden><Input /></Form.Item>
+                  <Form.Item label="目的国家"><Input aria-label="目的国家" value="英国" disabled /></Form.Item>
+                </>
+              ) : (
+                <Form.Item name="destinationCountry" label="目的国家" rules={[{ required: true, message: '请输入目的国家' }]}>
+                  <Input tabIndex={lookupTabIndex('destinationCountry')} placeholder="法国" />
+                </Form.Item>
+              )}
+              <Form.Item name="postalCode" label={isUnitedKingdom ? '英国邮编（可选）' : '邮编（意大利必填）'} rules={postalRequired ? [{ required: true, message: '意大利分区报价需要邮编' }] : []}>
+                <Input tabIndex={lookupTabIndex('postalCode')} placeholder={isUnitedKingdom ? '如 SW1A 1AA' : '如 20100'} />
               </Form.Item>
               {fieldVisibility.showAgentChannel ? (
                 <Form.Item name="channel" label="渠道">
