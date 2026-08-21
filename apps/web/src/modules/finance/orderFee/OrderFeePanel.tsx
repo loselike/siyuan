@@ -223,6 +223,14 @@ function hasChargePricing(row: OrderFeeRow): row is PayableFeeSummary | Business
   return 'chargeWeightKg' in row || 'unitPrice' in row;
 }
 
+function resolveOrderFeeSaveError(error: unknown) {
+  if (error && typeof error === 'object' && 'errorFields' in error) {
+    const errorFields = (error as { errorFields?: Array<{ errors?: string[] }> }).errorFields;
+    return errorFields?.flatMap((field) => field.errors ?? []).find(Boolean) ?? '请检查必填项后重试';
+  }
+  return error instanceof Error ? error.message : '费用保存失败，请稍后重试';
+}
+
 export function OrderFeePanel({
   apiClient,
   role,
@@ -454,42 +462,42 @@ export function OrderFeePanel({
   }, [editorForm]);
 
   const submitEditor = useCallback(async () => {
-    if (!editor) return;
-    const values = await editorForm.validateFields();
-    const billingUnit = editor.type === 'BUSINESS_COST'
-      ? (values.billingUnit ?? 'KG') as FinanceBillingUnit
-      : undefined;
-    const billingQuantity = editor.type === 'BUSINESS_COST'
-      ? Number(values.billingQuantity ?? values.chargeWeightKg ?? 0)
-      : undefined;
-    const amount = calculateOrderFeeAmount({
-      type: editor.type,
-      billingUnit,
-      billingQuantity,
-      chargeWeightKg: values.chargeWeightKg,
-      unitPrice: values.unitPrice
-    }) ?? Number(values.amount ?? 0);
-    const input: ShipmentFinanceItemCreateInput | ShipmentFinanceItemUpdateInput = {
-      name: values.name?.trim(),
-      amount,
-      currency: values.currency ?? 'RMB',
-      settlementMethod: values.settlementMethod,
-      paymentNo: editor.type === 'RECEIVABLE' ? values.paymentNo : undefined,
-      reconciliationStatus: editor.row ? undefined : 'PENDING',
-      agentId: editor.type === 'RECEIVABLE' ? undefined : values.agentId,
-      billingUnit,
-      billingQuantity: editor.type === 'BUSINESS_COST' ? billingQuantity : undefined,
-      chargeWeightKg: editor.type === 'BUSINESS_COST'
-        ? billingUnit === 'KG' ? billingQuantity : undefined
-        : editor.type === 'PAYABLE' ? values.chargeWeightKg : undefined,
-      unitPrice: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE' ? values.unitPrice : undefined,
-      amountOverridden: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE'
-        ? calculateAmountOverride({ amount, type: editor.type, billingUnit, billingQuantity, chargeWeightKg: values.chargeWeightKg, unitPrice: values.unitPrice })
-        : undefined,
-      remark: values.remark
-    };
+    if (!editor || submitting) return;
     setSubmitting(true);
     try {
+      const values = await editorForm.validateFields();
+      const billingUnit = editor.type === 'BUSINESS_COST'
+        ? (values.billingUnit ?? 'KG') as FinanceBillingUnit
+        : undefined;
+      const billingQuantity = editor.type === 'BUSINESS_COST'
+        ? Number(values.billingQuantity ?? values.chargeWeightKg ?? 0)
+        : undefined;
+      const amount = calculateOrderFeeAmount({
+        type: editor.type,
+        billingUnit,
+        billingQuantity,
+        chargeWeightKg: values.chargeWeightKg,
+        unitPrice: values.unitPrice
+      }) ?? Number(values.amount ?? 0);
+      const input: ShipmentFinanceItemCreateInput | ShipmentFinanceItemUpdateInput = {
+        name: values.name?.trim(),
+        amount,
+        currency: values.currency ?? 'RMB',
+        settlementMethod: values.settlementMethod,
+        paymentNo: editor.type === 'RECEIVABLE' ? values.paymentNo : undefined,
+        reconciliationStatus: editor.row ? undefined : 'PENDING',
+        agentId: editor.type === 'RECEIVABLE' ? undefined : values.agentId,
+        billingUnit,
+        billingQuantity: editor.type === 'BUSINESS_COST' ? billingQuantity : undefined,
+        chargeWeightKg: editor.type === 'BUSINESS_COST'
+          ? billingUnit === 'KG' ? billingQuantity : undefined
+          : editor.type === 'PAYABLE' ? values.chargeWeightKg : undefined,
+        unitPrice: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE' ? values.unitPrice : undefined,
+        amountOverridden: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE'
+          ? calculateAmountOverride({ amount, type: editor.type, billingUnit, billingQuantity, chargeWeightKg: values.chargeWeightKg, unitPrice: values.unitPrice })
+          : undefined,
+        remark: values.remark
+      };
       if (editor.row) {
         if (usesPendingReviewBusinessCostOnly && editor.type === 'BUSINESS_COST') {
           await apiClient.updatePendingReviewBusinessCost(shipment.id, editor.row.id, input);
@@ -505,16 +513,21 @@ export function OrderFeePanel({
         }
       }
       const editedId = editor.row?.id;
+      const successMessage = editor.row ? '费用已修改' : '费用已新增';
       closeEditor();
-      await reload();
       if (editedId) setInspectedRowId(editedId);
-      message.success(editor.row ? '费用已修改' : '费用已新增');
+      message.success(successMessage);
+      try {
+        await reload();
+      } catch {
+        message.warning('费用已保存，但列表刷新失败，请手动刷新后查看');
+      }
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '费用保存失败，请稍后重试');
+      message.error(resolveOrderFeeSaveError(error));
     } finally {
       setSubmitting(false);
     }
-  }, [apiClient, closeEditor, editor, editorForm, reload, shipment.id, usesPendingReviewBusinessCostOnly]);
+  }, [apiClient, closeEditor, editor, editorForm, reload, shipment.id, submitting, usesPendingReviewBusinessCostOnly]);
 
   const syncEditorAmount = useCallback((changedValues: Record<string, unknown>, values: ShipmentFinanceItemUpdateInput) => {
     if (!editor || editor.type === 'RECEIVABLE') return;
