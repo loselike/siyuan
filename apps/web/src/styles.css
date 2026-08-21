@@ -9307,27 +9307,31 @@ body.is-resizing-table-column {
 .pricing-legacy-module-card .ant-card-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 8px 10px;
 }
 
 .pricing-legacy-module-card .ant-space {
   display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   width: 100%;
 }
 
 .pricing-legacy-module-card .ant-space-item {
-  grid-column: span 3;
-}
-
-.pricing-legacy-module-card .ant-space-item:nth-child(n + 5) {
-  grid-column: span 4;
+  min-width: 0;
 }
 
 .pricing-legacy-module-card .ant-space-item,
 .pricing-legacy-module-card .ant-btn {
   width: 100%;
+}
+
+.pricing-legacy-module-card .ant-btn {
+  height: 34px;
+  padding-inline: 10px;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .pricing-legacy-result-card {
@@ -9617,13 +9621,11 @@ body.is-resizing-table-column {
     grid-column: span 1;
   }
 
+}
+
+@media (max-width: 960px) {
   .pricing-legacy-module-card .ant-space {
     grid-template-columns: repeat(2, minmax(140px, 1fr));
-  }
-
-  .pricing-legacy-module-card .ant-space-item,
-  .pricing-legacy-module-card .ant-space-item:nth-child(n + 5) {
-    grid-column: span 1;
   }
 }
 
