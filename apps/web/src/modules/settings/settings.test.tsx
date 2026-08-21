@@ -146,6 +146,14 @@ describe('Settings and admin flows', () => {
     expect(screen.getAllByText('业务看板').length).toBeGreaterThan(0);
     expect(screen.getAllByText('录单').length).toBeGreaterThan(0);
     expect(screen.getAllByText('待审核运单').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: /业务部/ }));
+    await user.click(screen.getByRole('button', { name: '录单' }));
+    expect(screen.getByText('录单授权')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '分配录单编辑' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '分配录单业务成本' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '分配录单应付费用' })).toBeInTheDocument();
+    expect(screen.queryByText('单票费用授权')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /分配单票费用/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole('tab', { name: '仓库管理' }));
     expect(screen.getAllByText('今日收货').length).toBeGreaterThan(0);
     expect(screen.getAllByText('在仓数据').length).toBeGreaterThan(0);
