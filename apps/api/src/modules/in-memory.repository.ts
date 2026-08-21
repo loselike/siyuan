@@ -396,7 +396,7 @@ import {
   redactWaterReceiptVoucher,
   sanitizeWaterReceiptPaymentNo
 } from './finance/water-receipt/water-receipt-view.policy.js';
-import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
+import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, isUnitedKingdomPricingDestination, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth, validatePricingDestinationScope } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
 import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildAgentMarkupListResponse, buildMarkupRuleIndex, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, groupAgentSourcesByScope, isLegacyPricingModule, markupRuleIndexKey, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, textMatch, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
@@ -3666,6 +3666,7 @@ export class InMemoryRepository {
     this.ensureStaffPricingAccess(principal);
     const lookupPermissionByModule: Record<LegacyPricingModule, PermissionKey> = {
       amazon: 'pricing:lookup:amazon', inquiry: 'pricing:lookup:europe-oversize', europeExpress: 'pricing:lookup:europe-express',
+      ukExpress: 'pricing:lookup:uk-express',
       southAfrica: 'pricing:lookup:south-africa', usaAirSea: 'pricing:lookup:usa-air-sea', canadaAirSea: 'pricing:lookup:canada-air-sea', dubaiAirSea: 'pricing:lookup:dubai-air-sea'
     };
     const authorizedModules = (await Promise.all(pricingMarkupModules.map(async (module) => (
@@ -3685,6 +3686,7 @@ export class InMemoryRepository {
         { key: 'amazon', label: '亚马逊查询', rowCount: amazonRows.length, sourceCount: booksByModule('amazon').length },
         { key: 'inquiry', label: '欧洲超大件综合查询', rowCount: rowsByModule('inquiry').length, sourceCount: booksByModule('inquiry').length },
         { key: 'europeExpress', label: '欧洲空海运铁路快递查询', rowCount: rowsByModule('europeExpress').length, sourceCount: booksByModule('europeExpress').length },
+        { key: 'ukExpress', label: '英国空海运铁路快递查询', rowCount: rowsByModule('ukExpress').length, sourceCount: booksByModule('ukExpress').length },
         { key: 'southAfrica', label: '南非专线查询', rowCount: rowsByModule('southAfrica').length, sourceCount: booksByModule('southAfrica').length },
         { key: 'usaAirSea', label: '美国空海运查询', rowCount: rowsByModule('usaAirSea').length, sourceCount: booksByModule('usaAirSea').length },
         { key: 'canadaAirSea', label: '加拿大空海查询', rowCount: rowsByModule('canadaAirSea').length, sourceCount: booksByModule('canadaAirSea').length },
@@ -4075,7 +4077,12 @@ export class InMemoryRepository {
         amazonCode
       };
     }
-    if ((normalizedInput.module === 'inquiry' || normalizedInput.module === 'europeExpress') && normalizedInput.channel?.trim() && !normalizeEuropeTransportModeFilter(normalizedInput.channel)) {
+    if (normalizedInput.module === 'ukExpress') {
+      normalizedInput = { ...normalizedInput, destinationCountry: '英国' };
+    } else if (normalizedInput.module === 'europeExpress' && isUnitedKingdomPricingDestination(normalizedInput.destinationCountry)) {
+      throw new BadRequestException('英国报价已拆分，请使用英国空海运铁路快递查询');
+    }
+    if ((normalizedInput.module === 'inquiry' || isEuropeExpressPricingFamily(normalizedInput.module)) && normalizedInput.channel?.trim() && !normalizeEuropeTransportModeFilter(normalizedInput.channel)) {
       throw new BadRequestException('欧洲查询仅支持空运、海运、铁路、铁海联运或全部渠道筛选');
     }
     const cargoProfile = createLargeCargoProfile(normalizedInput);
@@ -4086,20 +4093,20 @@ export class InMemoryRepository {
       .filter((row) => normalizedInput.module !== 'amazon' || priceRowAmazonOriginMatches(row, normalizedInput.origin))
       .filter((row) => normalizedInput.module !== 'inquiry' || inMemoryInquiryTransportMatches(row, normalizedInput.channel))
       .filter((row) => normalizedInput.module !== 'inquiry' || inMemoryInquiryCargoMatches(row, normalizedInput))
-      .filter((row) => normalizedInput.module !== 'europeExpress' || inMemoryEuropeTransportMatches(row, normalizedInput.channel))
+      .filter((row) => !isEuropeExpressPricingFamily(normalizedInput.module) || inMemoryEuropeTransportMatches(row, normalizedInput.channel))
       .filter((row) => priceRowTaxInclusionMatches(row, normalizedInput.taxInclusion))
       .filter((row) => normalizedInput.module !== 'canadaAirSea' || canadaAddressTypeMatchesWarehouseCode(row.warehouseCode, normalizedInput.canadaAddressType, normalizedInput.amazonCode))
       .filter((row) => !isAirSeaPricingModule(normalizedInput.module) || legacyPriceRowChannelMatches(row, normalizedInput.channel)), normalizedInput.module, cargoProfile);
     const postalScopedRows = normalizedInput.module === 'usaAirSea'
       ? selectInMemoryUsPostalPriceRows(moduleRows, normalizedInput.postalCode)
-      : normalizedInput.module === 'inquiry' || normalizedInput.module === 'europeExpress'
+      : normalizedInput.module === 'inquiry' || isEuropeExpressPricingFamily(normalizedInput.module)
         ? moduleRows.filter((row) => matchesEuropeanPostalRule(row.postalRule, normalizedInput.postalCode))
         : moduleRows;
     // The request's dropdown value is a UI hint, not a filter for source KG
     // tiers. Match by actual chargeable weight first, then report the exact
     // tier from the selected source row below.
     const moduleMarkupRules = filterAgentMarkupRulesByModule(this.agentMarkupRules, normalizedInput.module, postalScopedRows);
-    if (normalizedInput.module === 'europeExpress' && chargeableWeightKg <= 0) {
+    if (isEuropeExpressPricingFamily(normalizedInput.module) && chargeableWeightKg <= 0) {
       return redactLegacyPricingResponse(createInMemoryEuropeExpressUnitQuote(principal, normalizedInput, moduleRows, this.priceBooks, moduleMarkupRules), pricingVisibility);
     }
     const lookupDestinationCountry = normalizedInput.destinationCountry || defaultLegacyModuleDestination(normalizedInput.module);
@@ -4145,7 +4152,7 @@ export class InMemoryRepository {
       } : {}),
       warehouseCode: item.price.warehouseCode,
       destinationCountry: item.price.destinationCountry,
-      postalRule: normalizedInput.module === 'usaAirSea' || normalizedInput.module === 'inquiry' || normalizedInput.module === 'europeExpress'
+      postalRule: normalizedInput.module === 'usaAirSea' || normalizedInput.module === 'inquiry' || isEuropeExpressPricingFamily(normalizedInput.module)
         ? sourceRowById.get(item.price.id)?.postalRule
         : undefined,
       weightSegmentLabel: item.weightSegmentLabel,
@@ -4200,7 +4207,7 @@ export class InMemoryRepository {
 
   private async getPricingFieldVisibility(principal: Principal): Promise<PricingFieldVisibility> {
     const lookupGranted = (await Promise.all([
-      'pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express',
+      'pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:uk-express',
       'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea',
       'pricing:lookup:dubai-air-sea'
     ].map((permission) => this.hasPermission(principal.role, permission as PermissionKey)))).some(Boolean);
@@ -5147,6 +5154,11 @@ export class InMemoryRepository {
     if (!options.allowLargeImportJob && input.rows.length > PRICE_BOOK_JSON_IMPORT_ROW_LIMIT) {
       throw new BadRequestException(`价格表行数超过 ${PRICE_BOOK_JSON_IMPORT_ROW_LIMIT} 行，请使用文件导入任务上传`);
     }
+    try {
+      validatePricingDestinationScope(input.rows, targetModule);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '价格表目的地与查价模块不一致');
+    }
     const replacedBooks = this.priceBooks.filter((item) =>
       !item.deleted &&
       item.fileName === input.fileName.trim() &&
@@ -5336,7 +5348,7 @@ export class InMemoryRepository {
         return;
       }
       const rows = await parsePriceWorkbookBuffer(buffer, job.fileName, job.targetModule, job.agentShortName);
-      const transportHealth = job.targetModule === 'europeExpress' ? summarizeEuropeTransportImportHealth(rows) : undefined;
+      const transportHealth = isEuropeExpressPricingFamily(job.targetModule) ? summarizeEuropeTransportImportHealth(rows) : undefined;
       const oversizeSheetHealth = job.targetModule === 'inquiry' ? inspectEuropeOversizeWorkbookSheets(buffer, rows) : undefined;
       job.status = 'IMPORTING';
       job.totalRows = rows.length;
@@ -18934,6 +18946,7 @@ export class InMemoryRepository {
     if (scope === 'lookup' && module && !isAdministratorRole(principal.role)) {
       const permissionByModule: Record<LegacyPricingModule, PermissionKey> = {
         amazon: 'pricing:lookup:amazon', inquiry: 'pricing:lookup:europe-oversize', europeExpress: 'pricing:lookup:europe-express',
+        ukExpress: 'pricing:lookup:uk-express',
         southAfrica: 'pricing:lookup:south-africa', usaAirSea: 'pricing:lookup:usa-air-sea', canadaAirSea: 'pricing:lookup:canada-air-sea', dubaiAirSea: 'pricing:lookup:dubai-air-sea'
       };
       if (!(await this.hasPermission(principal.role, permissionByModule[module]))) throw new ForbiddenException(`${label}模块未分配查价权限`);
@@ -19794,7 +19807,7 @@ function priceRowSupportsLargeCargo(row: PriceBookRowSummary): boolean {
 
 function filterPriceRowsByCargoProfile(rows: PriceBookRowSummary[], module: LegacyPricingModule, profile: LargeCargoProfile): PriceBookRowSummary[] {
   if (module === 'southAfrica') return rows;
-  if (module === 'europeExpress') {
+  if (isEuropeExpressPricingFamily(module)) {
     if (profile.isLargeCargo) {
       throw new BadRequestException(largeCargoRedirectMessage(profile));
     }
@@ -19829,7 +19842,7 @@ function createInMemoryEuropeExpressUnitQuote(
   const priceBookAgentNameMap = new Map(activeBooks.map((book) => [book.id, book.agentShortName?.trim() || undefined]));
   const markupRules = buildSyncedAgentMarkupRules(
     persistedMarkupRules,
-    buildPriceBookAgentSourcesFromRows(priceRows, priceBookFileNameMap, priceBookAgentNameMap)
+    buildPriceBookAgentSourcesFromRows(priceRows, priceBookFileNameMap, priceBookAgentNameMap, input.module)
   ).filter((rule) => !rule.deletedAt && rule.enabled);
   const markupRuleIndex = buildMarkupRuleIndex(markupRules);
   const canViewInternalPricing = canViewPricingInternalForPrincipal(principal);
@@ -19857,7 +19870,7 @@ function createInMemoryEuropeExpressUnitQuote(
         transitLabel: row.transitLabel,
         specialRemark: row.specialRemark,
         productSurchargeRemark: row.productSurchargeRemark
-      }, 'europeExpress');
+      }, input.module);
       const realChannelName = displayRow.realChannelName?.trim() || displayRow.channelName;
       const publicCode = publicPricingRouteCode(displayRow.channelName, realChannelName, row.businessRouteName);
       const requirementAgentNames = [priceBookAgentName, row.agentName];
@@ -19868,7 +19881,7 @@ function createInMemoryEuropeExpressUnitQuote(
         : undefined;
       return {
         id: row.id,
-        module: 'europeExpress',
+        module: input.module,
         ...(canViewInternalPricing ? { sourceId: row.priceBookId } : {}),
         agentName: canViewInternalPricing ? priceBookAgentName : publicCode,
         origin: canViewInternalPricing ? row.sourceSheetName : undefined,
@@ -19893,7 +19906,7 @@ function createInMemoryEuropeExpressUnitQuote(
     .sort((left, right) => left.salesUnitPrice - right.salesUnitPrice || left.salesTotal - right.salesTotal);
   const responseRecommendations = recommendations.slice(0, PRICING_LOOKUP_RESPONSE_LIMIT);
   return {
-    module: 'europeExpress',
+    module: input.module,
     query: input,
     recommendations: responseRecommendations,
     cheapestRecommendations: recommendations.slice(0, 3),
@@ -20592,13 +20605,13 @@ function formatSouthAfricaRmb(value: number) {
   return `¥${roundMoney(value).toFixed(2)}`;
 }
 
-function buildPriceBookAgentSourcesFromRows(priceRows: PriceBookRowSummary[], fileNameByBookId: Map<string, string>, agentNameByBookId: Map<string, string | undefined> = new Map()): ActivePriceBookAgentSource[] {
+function buildPriceBookAgentSourcesFromRows(priceRows: PriceBookRowSummary[], fileNameByBookId: Map<string, string>, agentNameByBookId: Map<string, string | undefined> = new Map(), legacyModule?: LegacyPricingModule): ActivePriceBookAgentSource[] {
   const grouped = new Map<string, ActivePriceBookAgentSource>();
   const routeKeysByScope = new Map<string, Set<string>>();
   for (const row of priceRows) {
     const fileName = fileNameByBookId.get(row.priceBookId) ?? '';
     const agentName = agentNameByBookId.get(row.priceBookId) ?? row.agentName;
-    const source: ActivePriceBookAgentSource = { priceBookId: fileName ? row.priceBookId : '', fileName, agentName, lineCount: 0, routeCount: 0, quoteRowCount: 0, kgQuoteRowCount: 0, cbmQuoteRowCount: 0 };
+    const source: ActivePriceBookAgentSource = { priceBookId: fileName ? row.priceBookId : '', fileName, agentName, lineCount: 0, routeCount: 0, quoteRowCount: 0, kgQuoteRowCount: 0, cbmQuoteRowCount: 0, legacyModule };
     const key = agentMarkupScopeKey(source);
     const current = grouped.get(key) ?? source;
     current.lineCount += 1;
@@ -20828,7 +20841,12 @@ function defaultLegacyModuleDestination(module: LegacyPricingModule): string | u
   if (module === 'southAfrica') return '南非';
   if (module === 'canadaAirSea') return '加拿大';
   if (module === 'dubaiAirSea') return '迪拜';
+  if (module === 'ukExpress') return '英国';
   return '美国';
+}
+
+function isEuropeExpressPricingFamily(module: LegacyPricingModule | PriceBookImportTargetModule): boolean {
+  return module === 'europeExpress' || module === 'ukExpress';
 }
 
 function legacyPriceRowChannelMatches(row: PriceBookRowSummary, channel?: string) {

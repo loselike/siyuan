@@ -105,7 +105,7 @@ describe('agent markup query helpers', () => {
   });
 
   it('keeps legacy module recognition and explicit, scoped-book and unclassified rule isolation', () => {
-    expect(['amazon', 'inquiry', 'europeExpress', 'southAfrica', 'usaAirSea', 'canadaAirSea', 'dubaiAirSea'].every(isLegacyPricingModule)).toBe(true);
+    expect(['amazon', 'inquiry', 'europeExpress', 'ukExpress', 'southAfrica', 'usaAirSea', 'canadaAirSea', 'dubaiAirSea'].every(isLegacyPricingModule)).toBe(true);
     expect(isLegacyPricingModule('unclassified')).toBe(false);
     expect(normalizeAgentMarkupLegacyModule('amazon')).toBe('amazon');
     expect(normalizeAgentMarkupLegacyModule('invalid')).toBeUndefined();

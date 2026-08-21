@@ -44,7 +44,7 @@ type PricingImportDisplayRow = {
   productSurchargeRemark?: string;
 };
 
-const EUROPE_CHANNEL_MODULES = new Set<PriceBookImportTargetModule>(['inquiry', 'europeExpress']);
+const EUROPE_CHANNEL_MODULES = new Set<PriceBookImportTargetModule>(['inquiry', 'europeExpress', 'ukExpress']);
 const EUROPE_DISPLAY_ARTIFACT_PATTERN = /系统下单渠道|下单渠道|渠道名称|(?:备注|参考时效|全程时效|派送时效|运输时效|渠道说明)\s*[:：]/i;
 const EUROPE_PRICE_GROUP_PROMOTION_PATTERN = /\d+\s*[:：]\s*\d+(?:\.\d+)?\s*(?:减|降)/i;
 
@@ -61,7 +61,11 @@ export const PRICING_PARSER_RULE_VERSIONS: Record<PriceBookImportTargetModule, n
   inquiry: 7,
   // v12 keeps each side-by-side Zhenyun tax/channel group independent while
   // restoring the sheet prefix to the customer-facing channel label.
-  europeExpress: 12,
+  // v13 also enforces the Europe/United Kingdom price-pool boundary.
+  europeExpress: 13,
+  // UK starts from the current Europe parser contract, but keeps an independent
+  // revision so later UK-only workbook changes cannot rebuild Europe books.
+  ukExpress: 1,
   southAfrica: 1,
   // v8 also recognises structurally valid Topuda US sea courier sheets from
   // the selected USA Air/Sea module, without requiring "美国" in the sheet name.
@@ -290,8 +294,48 @@ export async function parsePriceWorkbookBuffer(
   agentShortName?: string
 ): Promise<ImportedPriceRow[]> {
   const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
-  return (await parsePriceWorkbook(arrayBuffer, { xlsx }, sourceName, targetModule, agentShortName))
+  const parsedRows = (await parsePriceWorkbook(arrayBuffer, { xlsx }, sourceName, targetModule, agentShortName))
     .map((row) => normalizePricingImportRowForModule(row, targetModule));
+  const scopedRows = scopeEuropeDestinationRows(parsedRows, targetModule);
+  if (targetModule === 'ukExpress' && parsedRows.length > 0 && scopedRows.length === 0) {
+    throw new Error('价格表未识别到英国目的地线路，请确认文件包含英国报价');
+  }
+  if (targetModule === 'europeExpress' && parsedRows.length > 0 && scopedRows.length === 0) {
+    throw new Error('价格表仅包含英国线路，请改为英国空海运铁路快递查询导入');
+  }
+  return scopedRows;
+}
+
+export function isUnitedKingdomPricingDestination(value?: string | null): boolean {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (!text) return false;
+  const compact = text.replace(/[\s._-]+/g, '');
+  return /英国|大不列颠/.test(text)
+    || compact.includes('unitedkingdom')
+    || compact.includes('greatbritain')
+    || /^(?:uk|gb|gbr)$/.test(compact);
+}
+
+export function validatePricingDestinationScope(
+  rows: Array<Pick<ImportedPriceRow, 'destinationCountry'>>,
+  targetModule?: PriceBookImportTargetModule
+): void {
+  if (targetModule === 'europeExpress' && rows.some((row) => isUnitedKingdomPricingDestination(row.destinationCountry))) {
+    throw new Error('英国线路必须导入英国空海运铁路快递查询，不能写入欧洲价格池');
+  }
+  if (targetModule === 'ukExpress' && rows.some((row) => !isUnitedKingdomPricingDestination(row.destinationCountry))) {
+    throw new Error('英国空海运铁路快递查询只允许导入英国目的地线路');
+  }
+}
+
+function scopeEuropeDestinationRows(rows: ImportedPriceRow[], targetModule?: PriceBookImportTargetModule): ImportedPriceRow[] {
+  if (targetModule === 'ukExpress') {
+    return rows.filter((row) => isUnitedKingdomPricingDestination(row.destinationCountry));
+  }
+  if (targetModule === 'europeExpress') {
+    return rows.filter((row) => !isUnitedKingdomPricingDestination(row.destinationCountry));
+  }
+  return rows;
 }
 
 export function inspectDubaiWorkbookSheets(buffer: Buffer): Array<{ sheetName: string; mode: 'AIR' | 'SEA' | 'UNASSIGNED' }> {
@@ -501,7 +545,7 @@ export async function parsePriceWorkbook(
       ? profile.amazonRows
       : targetModule === 'inquiry'
         ? profile.inquiryRows
-        : targetModule === 'europeExpress'
+        : targetModule === 'europeExpress' || targetModule === 'ukExpress'
           ? profile.europeExpressRows
           : [];
     if (rows.length) {
@@ -514,8 +558,8 @@ export async function parsePriceWorkbook(
   if (parserAgent === '驰汉') {
     const rows = parseChihanEuropeExpressPriceWorkbook(workbook, sourceName, agentShortName);
     if (rows.length) {
-      if (targetModule && targetModule !== 'europeExpress') {
-        throw new Error('驰汉价格表仅适用于欧洲空海运铁路快递查询，请选择该查价模块导入');
+      if (targetModule && targetModule !== 'europeExpress' && targetModule !== 'ukExpress') {
+        throw new Error('驰汉价格表仅适用于欧洲或英国空海运铁路快递查询，请选择对应查价模块导入');
       }
       return attachWorkbookLookupNotes(rows, lookupNotes);
     }
@@ -998,7 +1042,7 @@ function parseEpsEuropeExpressPriceWorkbook(
   targetModule?: PriceBookImportTargetModule,
   agentShortName?: string
 ): ImportedPriceRow[] {
-  if (targetModule !== 'europeExpress' || !/eps/i.test(`${agentShortName ?? ''} ${sourceName ?? ''}`)) {
+  if ((targetModule !== 'europeExpress' && targetModule !== 'ukExpress') || !/eps/i.test(`${agentShortName ?? ''} ${sourceName ?? ''}`)) {
     return [];
   }
 
@@ -3179,7 +3223,7 @@ function splitImportedDestinations(value: string, fallbackText: string, targetMo
   // destinations. Keep the country from the sheet and persist the raw value
   // separately as postalRule on the imported row.
   if (
-    (targetModule === 'inquiry' || targetModule === 'europeExpress')
+    (targetModule === 'inquiry' || targetModule === 'europeExpress' || targetModule === 'ukExpress')
     && fallbackDestination !== '未标记目的地'
     && /^[\d\s,，、/\\-]+$/.test(value)
   ) {

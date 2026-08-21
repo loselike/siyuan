@@ -354,13 +354,11 @@ describe('Siyuan API pricing', () => {
       ['国家/重量区间', '12KG+', '24KG+', '50KG+', '100KG+', '200KG+', '备注', '包装要求'],
       ['德国', 17, 15, 12.5, 11, 10.5, '40-45天（装柜-提取）', 'MSDS、UN38.3']
     ]), '欧洲海运电池快递专线');
-    const rows = await parsePriceWorkbookBuffer(
-      Buffer.from(xlsx.write(workbook, { type: 'array', bookType: 'xlsx' })),
-      '欧洲报价.xlsx',
-      'europeExpress'
-    );
+    const buffer = Buffer.from(xlsx.write(workbook, { type: 'array', bookType: 'xlsx' }));
+    const rows = await parsePriceWorkbookBuffer(buffer, '欧洲报价.xlsx', 'europeExpress');
+    const ukRows = await parsePriceWorkbookBuffer(buffer, '欧洲报价.xlsx', 'ukExpress');
 
-    const upsRows = rows.filter((row) => row.sourceSheetName === '英国海运');
+    const upsRows = ukRows.filter((row) => row.sourceSheetName === '英国海运');
     expect(upsRows.length).toBeGreaterThan(0);
     expect(upsRows.every((row) => row.channelName === '英国海运 - UPS英国海运双清')).toBe(true);
     expect(upsRows.every((row) => row.businessRouteName === 'UPS英国海运双清')).toBe(true);
@@ -373,7 +371,7 @@ describe('Siyuan API pricing', () => {
     expect(batteryRows.every((row) => !/系统下单渠道|备注|包装要求/.test(row.channelName))).toBe(true);
   });
 
-  it('parses Chihan tax-inclusive/exclusive KG and truck-headhaul CBM rows only for Europe Express', async () => {
+  it('splits Chihan UK rows from the Europe Express price pool', async () => {
     const workbook = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(workbook, xlsx.utils.aoa_to_sheet([
       ['UPS英国海运双清-1:300减0.5'],
@@ -394,27 +392,31 @@ describe('Siyuan API pricing', () => {
     ]), '非英海运');
     const buffer = Buffer.from(xlsx.write(workbook, { type: 'array', bookType: 'xlsx' }));
 
-    const rows = await parsePriceWorkbookBuffer(buffer, '7.8-驰汉.xlsx', 'europeExpress', '驰汉');
+    const europeRows = await parsePriceWorkbookBuffer(buffer, '7.8-驰汉.xlsx', 'europeExpress', '驰汉');
+    const ukRows = await parsePriceWorkbookBuffer(buffer, '7.8-驰汉.xlsx', 'ukExpress', '驰汉');
 
-    expect(rows).toEqual(expect.arrayContaining([
+    expect(ukRows).toEqual(expect.arrayContaining([
       expect.objectContaining({ destinationCountry: '英国', channelName: '英国海运 - UPS英国海运双清（不包税）', priceTierLabel: '21KG+', costPerKg: 8.2, minWeightKg: 21, maxWeightKg: 44.999 }),
       expect.objectContaining({ destinationCountry: '英国', channelName: '英国海运 - UPS英国海运双清（包税）', priceTierLabel: '101KG+', costPerKg: 8 }),
-      expect.objectContaining({ destinationCountry: '英国', channelName: '英国海运 - 卡车英国海运双清（不包税）', priceTierLabel: '10CBM+', cbmPrice: 880, specialRemark: expect.stringContaining('头程参考价') }),
+      expect.objectContaining({ destinationCountry: '英国', channelName: '英国海运 - 卡车英国海运双清（不包税）', priceTierLabel: '10CBM+', cbmPrice: 880, specialRemark: expect.stringContaining('头程参考价') })
+    ]));
+    expect(europeRows).toEqual(expect.arrayContaining([
       expect.objectContaining({ destinationCountry: '荷兰', channelName: '非英海运 - UPS欧洲海运双清（包税）', priceTierLabel: '21KG+', costPerKg: 10.8 }),
       expect.objectContaining({ destinationCountry: '德国', channelName: '非英海运 - UPS欧洲海运双清（不包税）', priceTierLabel: '301KG+', minWeightKg: 301, maxWeightKg: 99999, costPerKg: 6.3 })
     ]));
-    expect(rows.every((row) => /包税）$/.test(row.channelName))).toBe(true);
-    await expect(parsePriceWorkbookBuffer(buffer, '7.8-驰汉.xlsx', 'amazon', '驰汉')).rejects.toThrow('仅适用于欧洲空海运铁路快递查询');
+    expect(ukRows.every((row) => row.destinationCountry === '英国' && /包税）$/.test(row.channelName))).toBe(true);
+    expect(europeRows.every((row) => row.destinationCountry !== '英国' && /包税）$/.test(row.channelName))).toBe(true);
+    await expect(parsePriceWorkbookBuffer(buffer, '7.8-驰汉.xlsx', 'amazon', '驰汉')).rejects.toThrow('仅适用于欧洲或英国空海运铁路快递查询');
   });
 
-  it('filters Chihan Europe Express results by tax inclusion without mixing tax statuses', async () => {
+  it('filters Chihan UK results by tax inclusion without mixing tax statuses', async () => {
     const adminToken = await app.loginAs('admin');
     const imported = await request(app.getHttpServer())
       .post('/api/pricing/books/import')
       .set('Authorization', app.auth(adminToken))
       .send({
         fileName: '7.8-驰汉-税务筛选.xlsx',
-        targetModule: 'europeExpress',
+        targetModule: 'ukExpress',
         agentShortName: '驰汉',
         rows: [
           { agentName: '驰汉', sourceSheetName: '英国海运', channelName: '英国海运 - UPS英国海运双清（包税）', realChannelName: 'UPS英国海运双清', businessRouteName: 'UPS英国海运双清（包税）', destinationCountry: '英国', minWeightKg: 21, maxWeightKg: 44.999, costPerKg: 11, priceTierLabel: '21KG+', currency: 'RMB' },
@@ -424,14 +426,45 @@ describe('Siyuan API pricing', () => {
       .expect(201);
 
     await request(app.getHttpServer())
-      .post('/api/pricing/legacy/europe-express/quote')
+      .post('/api/pricing/legacy/uk-express/quote')
       .set('Authorization', app.auth(adminToken))
       .send({ destinationCountry: '英国', channel: '海运', taxInclusion: 'EXCLUDED', chargeableWeightKg: 21 })
       .expect(201)
       .expect((response) => {
         expect(response.body.recommendations).toHaveLength(1);
+        expect(response.body.query.destinationCountry).toBe('英国');
         expect(response.body.selected).toEqual(expect.objectContaining({ channelName: '英国海运 - UPS英国海运双清（不包税）', costUnitPrice: 8.2 }));
       });
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/legacy/europe-express/quote')
+      .set('Authorization', app.auth(adminToken))
+      .send({ destinationCountry: '英国', channel: '海运', chargeableWeightKg: 21 })
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        fileName: '错误欧洲英国线路.xlsx',
+        targetModule: 'europeExpress',
+        agentShortName: '驰汉',
+        rows: [{ agentName: '驰汉', channelName: '英国海运', destinationCountry: '英国', minWeightKg: 1, maxWeightKg: 100, costPerKg: 10, currency: 'RMB' }]
+      })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toContain('不能写入欧洲价格池'));
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        fileName: '错误英国欧洲线路.xlsx',
+        targetModule: 'ukExpress',
+        agentShortName: '驰汉',
+        rows: [{ agentName: '驰汉', channelName: '德国海运', destinationCountry: '德国', minWeightKg: 1, maxWeightKg: 100, costPerKg: 10, currency: 'RMB' }]
+      })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toContain('只允许导入英国'));
   });
 
   it('does not expand European numeric postal regions into warehouse-code rows', async () => {
@@ -4828,13 +4861,26 @@ describe('Siyuan API pricing', () => {
     await request(app.getHttpServer())
       .put('/api/system/roles/UG_BUSINESS/permissions')
       .set('Authorization', app.auth(adminToken))
-      .send({ permissions: ['pricing:lookup:view', 'pricing:lookup:meta-view', 'pricing:lookup:amazon'] })
+      .send({ permissions: ['pricing:lookup:view', 'pricing:lookup:meta-view', 'pricing:lookup:amazon', 'pricing:lookup:europe-express'] })
       .expect(200);
 
     await request(app.getHttpServer())
       .get('/api/pricing/legacy/quote-meta')
       .set('Authorization', app.auth(operatorToken))
       .expect(200);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/legacy/europe-express/quote')
+      .set('Authorization', app.auth(operatorToken))
+      .send({ destinationCountry: '德国', chargeableWeightKg: 10 })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('没有匹配的代理成本价'));
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/legacy/uk-express/quote')
+      .set('Authorization', app.auth(operatorToken))
+      .send({ destinationCountry: '英国', channel: '海运', chargeableWeightKg: 10 })
+      .expect(403);
 
     await request(app.getHttpServer())
       .post('/api/pricing/legacy/canada-air-sea/quote')

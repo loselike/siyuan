@@ -444,7 +444,7 @@ import {
   sanitizeWaterReceiptPaymentNo
 } from './finance/water-receipt/water-receipt-view.policy.js';
 import { generateTemporaryPassword, getPasswordStrengthError, hashPassword, passwordHashNeedsRehash, verifyPassword } from './password.js';
-import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
+import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, isUnitedKingdomPricingDestination, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth, validatePricingDestinationScope } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, cbmTierMatches, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, normalizeWarehouseCode, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
 import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildAgentMarkupListResponse, buildMarkupRuleIndex, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, shouldIncludeAgentMarkupHits, textMatch, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { mapPriceBook, mapPriceBookImportJob } from './pricing/price-book/price-book-query.mapper.js';
@@ -4962,7 +4962,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         amazonCode
       };
     }
-    if ((normalizedInput.module === 'inquiry' || normalizedInput.module === 'europeExpress') && normalizedInput.channel?.trim() && !normalizeEuropeTransportModeFilter(normalizedInput.channel)) {
+    if (normalizedInput.module === 'ukExpress') {
+      normalizedInput = { ...normalizedInput, destinationCountry: '英国' };
+    } else if (normalizedInput.module === 'europeExpress' && isUnitedKingdomPricingDestination(normalizedInput.destinationCountry)) {
+      throw new BadRequestException('英国报价已拆分，请使用英国空海运铁路快递查询');
+    }
+    if ((normalizedInput.module === 'inquiry' || isEuropeExpressPricingFamily(normalizedInput.module)) && normalizedInput.channel?.trim() && !normalizeEuropeTransportModeFilter(normalizedInput.channel)) {
       throw new BadRequestException('欧洲查询仅支持空运、海运、铁路、铁海联运或全部渠道筛选');
     }
     const lookupDestinationCountry = normalizedInput.destinationCountry || defaultLegacyModuleDestination(normalizedInput.module);
@@ -5066,7 +5071,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private async getPricingFieldVisibility(principal: Principal): Promise<PricingFieldVisibility> {
     const lookupGranted = (await Promise.all([
-      'pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express',
+      'pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:uk-express',
       'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea',
       'pricing:lookup:dubai-air-sea'
     ].map((permission) => this.hasPermission(principal.role, permission as PermissionKey)))).some(Boolean);
@@ -6906,7 +6911,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         return;
       }
       const parsedRows = await parsePriceWorkbookBuffer(buffer, fileName, targetModule, job?.agentShortName ?? undefined);
-      const transportHealth = targetModule === 'europeExpress' ? summarizeEuropeTransportImportHealth(parsedRows) : undefined;
+      const transportHealth = isEuropeExpressPricingFamily(targetModule) ? summarizeEuropeTransportImportHealth(parsedRows) : undefined;
       const oversizeSheetHealth = targetModule === 'inquiry' ? inspectEuropeOversizeWorkbookSheets(buffer, parsedRows) : undefined;
       await (this.prisma as any).priceBookImportJob.update({ where: { id: jobId }, data: { status: 'IMPORTING', totalRows: parsedRows.length, message: `正在导入 ${parsedRows.length} 行` } });
       const boundAgent = { id: job?.agentId, shortName: job?.agentShortName };
@@ -7155,7 +7160,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
     // Keep unclassified Europe Express rows only in the raw diagnostic source;
     // PriceBookRow is the lookup fallback and has no transportMode column.
-    const operationalNormalizedRows = targetModule === 'europeExpress'
+    const operationalNormalizedRows = isEuropeExpressPricingFamily(targetModule)
       ? normalizedRows.filter((row) => isClassifiedEuropeImportRow(row))
       : normalizedRows;
     const priceRows = operationalNormalizedRows.filter((row) => !isCbmPriceBookImportRow(row)).map((row) => ({
@@ -7346,6 +7351,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     inputRows: PriceBookImportInput['rows'],
     options: { returnRows?: boolean; jobId?: string; onProgress?: (processedRows: number) => Promise<void> } = {}
   ): Promise<PriceBookImportResult> {
+    try {
+      validatePricingDestinationScope(inputRows, targetModule);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '价格表目的地与查价模块不一致');
+    }
     inputRows.forEach((row, index) => {
       const hasKgPrice = Number.isFinite(row.costPerKg) && Number(row.costPerKg) > 0;
       const hasCbmPrice = Number.isFinite(row.cbmPrice) && Number(row.cbmPrice) > 0;
@@ -7428,7 +7438,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     // Keep Europe Express rows without a decisive classification only in the
     // raw legacy source, so a partial legacy write can never expose them as
     // business quotes through the normalized-row fallback.
-    const operationalNormalizedRows = targetModule === 'europeExpress'
+    const operationalNormalizedRows = isEuropeExpressPricingFamily(targetModule)
       ? normalizedRows.filter((row) => isClassifiedEuropeImportRow(row))
       : normalizedRows;
     const rows = operationalNormalizedRows.filter((row) => !isCbmPriceBookImportRow(row)).map((row) => ({
@@ -22024,6 +22034,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (isAdministratorRole(principal.role)) return true;
     const permissionByModule: Record<LegacyPricingModule, PermissionKey> = {
       amazon: 'pricing:lookup:amazon', inquiry: 'pricing:lookup:europe-oversize', europeExpress: 'pricing:lookup:europe-express',
+      ukExpress: 'pricing:lookup:uk-express',
       southAfrica: 'pricing:lookup:south-africa', usaAirSea: 'pricing:lookup:usa-air-sea', canadaAirSea: 'pricing:lookup:canada-air-sea', dubaiAirSea: 'pricing:lookup:dubai-air-sea'
     };
     return this.hasPermission(principal.role, permissionByModule[module]);
@@ -26483,10 +26494,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!activeBookIds.length) return [];
     type KgStats = { priceBookId: string; quoteRowCount: number; routeCount: number };
     type LegacyStats = { priceBookId: string; kgQuoteRowCount: number; kgRouteCount: number; cbmQuoteRowCount: number; cbmRouteCount: number };
-    const europeBookIds = scopedBooks
-      .filter((book: any) => normalizeAgentMarkupLegacyModule(book.targetModule) === 'europeExpress')
+    const europeExpressFamilyBookIds = scopedBooks
+      .filter((book: any) => {
+        const bookModule = normalizeAgentMarkupLegacyModule(book.targetModule);
+        return bookModule ? isEuropeExpressPricingFamily(bookModule) : false;
+      })
       .map((book: any) => book.id);
-    const [kgStatsRows, legacyStatsRows, europeLegacySources] = await Promise.all([
+    const [kgStatsRows, legacyStatsRows, europeExpressFamilyLegacySources] = await Promise.all([
       this.prisma.$queryRaw<KgStats[]>(Prisma.sql`
         SELECT
           "priceBookId",
@@ -26500,7 +26514,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         SELECT
           "LegacyPricingSource"."priceBookId" AS "priceBookId",
           COUNT(*) FILTER (WHERE COALESCE("LegacyPricingRow"."cbmPrice", 0) <= 0
-            AND ("LegacyPricingSource"."module" <> 'europeExpress'
+            AND ("LegacyPricingSource"."module" NOT IN ('europeExpress', 'ukExpress')
               OR UPPER(COALESCE("LegacyPricingRow"."raw"->>'transportMode', '')) IN ('AIR', 'SEA', 'RAIL', 'SEA_RAIL'))
           )::int AS "kgQuoteRowCount",
           COUNT(DISTINCT (
@@ -26508,18 +26522,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             COALESCE(NULLIF(BTRIM(COALESCE("LegacyPricingRow"."raw"->>'realChannelName', '')), ''), NULLIF(BTRIM("LegacyPricingRow"."serviceName"), ''), "LegacyPricingRow"."channelName"),
             "LegacyPricingRow"."destinationCountry"
           )) FILTER (WHERE COALESCE("LegacyPricingRow"."cbmPrice", 0) <= 0
-            AND ("LegacyPricingSource"."module" <> 'europeExpress'
+            AND ("LegacyPricingSource"."module" NOT IN ('europeExpress', 'ukExpress')
               OR UPPER(COALESCE("LegacyPricingRow"."raw"->>'transportMode', '')) IN ('AIR', 'SEA', 'RAIL', 'SEA_RAIL'))
           )::int AS "kgRouteCount",
           COUNT(*) FILTER (WHERE "LegacyPricingRow"."cbmPrice" > 0
-            AND "LegacyPricingSource"."module" <> 'europeExpress'
+            AND "LegacyPricingSource"."module" NOT IN ('europeExpress', 'ukExpress')
           )::int AS "cbmQuoteRowCount",
           COUNT(DISTINCT (
             "LegacyPricingRow"."channelName",
             COALESCE(NULLIF(BTRIM(COALESCE("LegacyPricingRow"."raw"->>'realChannelName', '')), ''), NULLIF(BTRIM("LegacyPricingRow"."serviceName"), ''), "LegacyPricingRow"."channelName"),
             "LegacyPricingRow"."destinationCountry"
           )) FILTER (WHERE "LegacyPricingRow"."cbmPrice" > 0
-            AND "LegacyPricingSource"."module" <> 'europeExpress'
+            AND "LegacyPricingSource"."module" NOT IN ('europeExpress', 'ukExpress')
           )::int AS "cbmRouteCount"
         FROM "LegacyPricingRow"
         INNER JOIN "LegacyPricingSource" ON "LegacyPricingSource"."id" = "LegacyPricingRow"."sourceId"
@@ -26527,9 +26541,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           AND "LegacyPricingSource"."deletedAt" IS NULL
         GROUP BY "LegacyPricingSource"."priceBookId"
       `),
-      europeBookIds.length
+      europeExpressFamilyBookIds.length
         ? (this.prisma as any).legacyPricingSource.findMany({
-          where: { priceBookId: { in: europeBookIds }, module: 'europeExpress', deletedAt: null },
+          where: { priceBookId: { in: europeExpressFamilyBookIds }, module: { in: ['europeExpress', 'ukExpress'] }, deletedAt: null },
           include: { rows: true }
         })
         : Promise.resolve([])
@@ -26537,7 +26551,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const kgStatsByBook = new Map(kgStatsRows.map((row) => [row.priceBookId, row]));
     const legacyStatsByBook = new Map(legacyStatsRows.map((row) => [row.priceBookId, row]));
     const europeRowsByBook = new Map<string, any[]>();
-    for (const source of europeLegacySources as any[]) {
+    for (const source of europeExpressFamilyLegacySources as any[]) {
       const rows = europeRowsByBook.get(String(source.priceBookId)) ?? [];
       rows.push(...(source.rows ?? []));
       europeRowsByBook.set(String(source.priceBookId), rows);
@@ -26546,7 +26560,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const kgStats = kgStatsByBook.get(book.id);
       const legacyStats = legacyStatsByBook.get(book.id);
       const normalizedKgQuoteRows = Number(kgStats?.quoteRowCount ?? 0);
-      const isEuropeExpress = normalizeAgentMarkupLegacyModule(book.targetModule) === 'europeExpress';
+      const bookModule = normalizeAgentMarkupLegacyModule(book.targetModule);
+      const isEuropeExpress = bookModule ? isEuropeExpressPricingFamily(bookModule) : false;
       // Europe Express keeps raw rows for diagnostics, but only rows with a
       // decisive transport mode are operational quotes. Legacy stats apply
       // here even when normalized KG rows exist, otherwise unclassified rows
@@ -32095,6 +32110,7 @@ const legacyModuleLabels: Record<LegacyPricingModule, string> = {
   amazon: '亚马逊查询',
   inquiry: '欧洲超大件综合查询',
   europeExpress: '欧洲空海运铁路快递查询',
+  ukExpress: '英国空海运铁路快递查询',
   southAfrica: '南非专线查询',
   usaAirSea: '美国空海运查询',
   canadaAirSea: '加拿大空海查询',
@@ -32118,9 +32134,13 @@ function legacyRowSupportsLargeCargo(row: Partial<LegacyPricingRowInternal & Pri
   return positive.test(routeText);
 }
 
+function isEuropeExpressPricingFamily(module: LegacyPricingModule | PriceBookImportTargetModule): boolean {
+  return module === 'europeExpress' || module === 'ukExpress';
+}
+
 function filterLegacyRowsByCargoProfile<T extends Partial<LegacyPricingRowInternal & PriceBookRowSummary>>(rows: T[], module: LegacyPricingModule, profile: LargeCargoProfile): T[] {
   if (module === 'southAfrica') return rows;
-  if (module === 'europeExpress') {
+  if (isEuropeExpressPricingFamily(module)) {
     if (profile.isLargeCargo) {
       throw new BadRequestException(largeCargoRedirectMessage(profile));
     }
@@ -32372,6 +32392,7 @@ function defaultLegacyModuleDestination(module: LegacyPricingModule): string | u
   if (module === 'southAfrica') return '南非';
   if (module === 'canadaAirSea') return '加拿大';
   if (module === 'dubaiAirSea') return '迪拜';
+  if (module === 'ukExpress') return '英国';
   return '美国';
 }
 
@@ -32437,7 +32458,7 @@ function createLegacyPricingQuote(
   const markupRules = buildSyncedAgentMarkupRules(moduleMarkupRules, buildLegacyAgentSourcesFromRows(moduleRows, activePriceBooks, input.module)).filter((rule) => rule.enabled && !rule.deletedAt);
   const markupRuleIndex = buildMarkupRuleIndex(markupRules);
   const canViewInternalPricing = canViewPricingInternalForPrincipal(principal);
-  const unitPreview = input.module === 'europeExpress' && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0);
+  const unitPreview = isEuropeExpressPricingFamily(input.module) && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0);
   const recommendations = filtered
     .map((row) => legacyRowToRecommendation(row, input, chargeableWeightKg, markupRuleIndex, canViewInternalPricing, activePriceBookBySourceId))
     .filter((row): row is LegacyPricingRecommendation => Boolean(row))
@@ -32477,7 +32498,7 @@ function legacyRowToRecommendation(
   const kgPrice = Number(row.costPerKg);
   const cbmPrice = Number(row.cbmPrice);
   const volumeCbm = Number(input.volumeCbm ?? 0);
-  const unitPreview = input.module === 'europeExpress'
+  const unitPreview = isEuropeExpressPricingFamily(input.module)
     && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0)
     && (!Number.isFinite(cbmPrice) || cbmPrice <= 0)
     && Number.isFinite(kgPrice)
@@ -32605,11 +32626,11 @@ function selectMostSpecificLegacyWarehouseRows(rows: LegacyPricingRowInternal[],
 }
 
 function legacyWeightMatches(row: LegacyPricingRowInternal, chargeableWeightKg: number, volumeCbm?: number, module?: LegacyPricingModule) {
-  if (module === 'europeExpress' && Number(row.cbmPrice ?? 0) > 0) return false;
+  if (module && isEuropeExpressPricingFamily(module) && Number(row.cbmPrice ?? 0) > 0) return false;
   if (row.cbmPrice && Number(volumeCbm ?? 0) > 0) return cbmTierMatches(row.tierLabel, Number(volumeCbm ?? 0));
   const min = row.minWeightKg ?? 0;
   const max = row.maxWeightKg ?? 999999;
-  if (module === 'europeExpress' && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0)) {
+  if (module && isEuropeExpressPricingFamily(module) && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0)) {
     return Number.isFinite(row.costPerKg) && Number(row.costPerKg) > 0;
   }
   if (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0) return !row.costPerKg;
@@ -32636,7 +32657,7 @@ function legacyChannelMatches(row: LegacyPricingRowInternal, channel?: string) {
   if (row.module === 'inquiry') {
     return legacyInquiryTransportMatches(row, channel);
   }
-  if (row.module === 'europeExpress') {
+  if (isEuropeExpressPricingFamily(row.module)) {
     const mode = inferEuropeTransportMode({
       channelName: row.channelName,
       realChannelName: String((row.raw as Record<string, unknown> | undefined)?.realChannelName ?? ''),
@@ -32671,7 +32692,7 @@ function legacyProductMatches(row: LegacyPricingRowInternal, productName?: strin
 function legacyPostalMatches(row: LegacyPricingRowInternal, postalCode?: string, address?: string) {
   const rule = row.postalRule?.trim();
   if (!rule) return true;
-  if (row.module === 'inquiry' || row.module === 'europeExpress') {
+  if (row.module === 'inquiry' || isEuropeExpressPricingFamily(row.module)) {
     return matchesEuropeanPostalRule(rule, postalCode);
   }
   const query = `${postalCode ?? ''} ${address ?? ''}`.trim().toLowerCase();

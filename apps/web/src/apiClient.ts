@@ -1133,6 +1133,7 @@ export class ApiClient {
       amazon: '/pricing/legacy/amazon/quote',
       inquiry: '/pricing/legacy/inquiry/quote',
       europeExpress: '/pricing/legacy/europe-express/quote',
+      ukExpress: '/pricing/legacy/uk-express/quote',
       southAfrica: '/pricing/legacy/south-africa/quote',
       usaAirSea: '/pricing/legacy/usa-air-sea/quote',
       canadaAirSea: '/pricing/legacy/canada-air-sea/quote',

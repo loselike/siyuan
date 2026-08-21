@@ -2129,7 +2129,7 @@ export interface PriceLookupResponse {
   grossProfit?: number;
 }
 
-export type LegacyPricingModule = 'amazon' | 'inquiry' | 'europeExpress' | 'southAfrica' | 'usaAirSea' | 'canadaAirSea' | 'dubaiAirSea';
+export type LegacyPricingModule = 'amazon' | 'inquiry' | 'europeExpress' | 'ukExpress' | 'southAfrica' | 'usaAirSea' | 'canadaAirSea' | 'dubaiAirSea';
 
 export interface DubaiPriceTableRow {
   id: string;
