@@ -1,6 +1,6 @@
 # 发布切换连续可用与旧静态资源恢复
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 会话标题：`Sunny｜架构控制面快速落地｜08`
 - 续接自：`docs/archive/dev-now/2026-08/system-role-runtime-input-phase7-20260821.md`
 - 上下文状态：`green`
@@ -56,3 +56,19 @@
 - `f22bdd83` 首次标准提升在候选 API 健康后、任何容器替换前因旧 Web 无法解析 Compose one-off 候选容器名失败关闭；旧 API/Web 容器 ID 与 digest 未变，候选已删除、Nginx 已保持 canonical、公网 health 200。
 - 已核对远端源码与 `f22bdd83` 三类 fingerprint 一致并清除精确 recovery marker，锁恢复 free；不把该失败误报为完成。
 - 修正方向：不依赖 one-off DNS 名，读取候选在 Compose 网络的 IPv4，经旧 Web 直连健康验证后短暂写入 Nginx；仍保留原健康门、回滚和写请求不重放边界。
+
+## 完成与 47 证据
+
+- 修正已由 PR #31 合并 `main`，主干 CI `32447313358` 通过；标准 Git/CI 不可变镜像发布完成，release ID 为 `git-bb57051cdfc3_web-aa1e0fe3eb3d_api-3eeeb2ffa0b5`。
+- 真实 warm handoff 覆盖候选 API 健康、旧 Web 直连候选、临时 upstream、canonical 替换与回切；同步持续探针共 1,426 次，HTTP 失败 0。
+- 发布后 API/Web 容器均为预期 GHCR digest，source provenance 为 `GIT_SOURCE_BUILD/ORIGIN_BRANCH/GHCR_DIGESTS`，公网 health 与 `/version.json` 正常；HTML/version 均 no-store，静态 bundle 含旧 chunk 恢复标记。
+- Nginx 已恢复唯一 canonical `proxy_pass http://api:3001/api/;`，候选容器为 0；切换时间段日志无 upstream refused、502/503/504 或未处理错误；锁 free、recovery clear。
+- 本次没有执行 migration/seed，没有修改 UI、业务流程、权限码、接口字段、状态、金额、审计或生产业务数据；并发合入的运单发票模板权限修复已保留并随同发布。
+
+## 阶段重评
+
+- 安全/数据正确性：系统站点与员工仍有 8 条裸 `@Body()`，价值高但 `null`、空 body、字符串布尔值及对象归属优先级尚未冻结；继续前必须先做 characterization，不能批量套 schema。
+- 高频业务流：发布期旧 chunk 与 API 空窗已由真实探针闭环，继续加重客户端重试的边际收益已明显下降；不扩大到写请求或全局刷新。
+- 后端架构：巨型 Repository/DataController 仍是长期最高结构债务，但下一刀若无代表路由与权限/持久化保护，短期回归风险高于收益。
+- GitHub 参考：Vite 的 `vite:preloadError`、Docker start-first 思路与 Nginx upstream 仅用于本阶段可用性；Vendure `RequestContext` 的显式请求上下文适合后续领域 Service/Repository 边界，但 Sunny 不引入其电商模型、GraphQL 或框架级事务抽象。
+- 决定：下一切片转向系统站点/员工输入保护，先冻结 8 条现有兼容语义，再接共享 schema；完成后重新比较订单/仓库高频数据所有权与一个后端领域模块切片。
