@@ -7,8 +7,8 @@
 - 已观察压缩：`0`
 - 输入来源：`用户持续目标；Phase6 完成重评`
 - 会话 slug：`system-role-runtime-input-phase7-20260821`
-- 分支：`待新会话从最新 main 创建 codex/system-role-runtime-input-phase7-20260821`
-- worktree：`待创建独立 worktree`
+- 分支：`codex/system-role-runtime-input-phase7-20260821`
+- worktree：`/Users/j1ng/Tools/sunny-system-role-runtime-input-phase7-20260821`
 
 ## 用户可见目标
 
@@ -55,5 +55,7 @@
 
 ## 交接
 
-- 阻塞：无；尚未开始代码修改。
-- 准确下一步：从最新 `main` 创建独立 worktree，先做五条路由迁移前 characterization；以当前合法/非法行为决定共享 schema 是否可等价接入。
+- 阻塞：需要用户确认只针对畸形输入的错误契约修正；合法 UI 请求与业务流程不受影响。
+- 迁移前证据：五条路由均保持未登录 401、财务岗位 403；管理员合法创建、修改、启停、保存权限、复制权限和未知字段忽略全部通过，最终岗位/权限状态可恢复。
+- 已确认的既有危险行为：`label` 数字、`permissions` 数字、`sourceRoleKey` 数字分别触发未控制 500；根数组或空 body 可让启停接口以 200 把岗位停用，并可让权限保存接口以 200 清空权限；字符串 `enabled: "true"` 同样会以 200 把岗位停用。原始非法 JSON 已由 body parser 稳定拒绝为 400。
+- 准确下一步：取得授权后把上述字段类型错误、根数组、缺少 `enabled/permissions` 和字符串布尔值统一改为稳定 400；保留合法字段、未知字段忽略、权限先行、成功响应、审计与持久化语义，再接共享 schema 和精确门禁。
