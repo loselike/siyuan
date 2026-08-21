@@ -43,7 +43,7 @@ siyuan_47_warm_replace_api() {
   safe_token="$(printf '%s' "$lock_token" | tr -cd '[:alnum:]_.-')"
   [[ -n "$safe_token" ]] || { echo "API_WARM_HANDOFF_TOKEN_INVALID" >&2; return 64; }
   local candidate="siyuan-api-warm-${safe_token:0:48}"
-  local web_container old_api canonical_api work_dir original_conf candidate_conf
+  local web_container old_api canonical_api candidate_ip work_dir original_conf candidate_conf
   web_container="$(docker compose ps -q web)"
   old_api="$(docker compose ps -q api)"
   [[ -n "$web_container" && -n "$old_api" ]] || {
@@ -64,17 +64,21 @@ siyuan_47_warm_replace_api() {
     rm -rf -- "$work_dir"
     return 1
   fi
-  if ! docker exec "$web_container" getent hosts "$candidate" </dev/null >/dev/null 2>&1; then
-    echo "API_WARM_HANDOFF_CANDIDATE_UNRESOLVABLE" >&2
+  candidate_ip="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' "$candidate" \
+    | sed -n '1p')"
+  if [[ ! "$candidate_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+    || ! docker exec "$web_container" wget -q -O /dev/null "http://${candidate_ip}:3001/api/health" \
+      </dev/null >/dev/null 2>&1; then
+    echo "API_WARM_HANDOFF_CANDIDATE_UNREACHABLE" >&2
     docker rm -f "$candidate" >/dev/null 2>&1 || true
     rm -rf -- "$work_dir"
     return 1
   fi
 
   docker cp "$web_container:/etc/nginx/conf.d/default.conf" "$original_conf"
-  sed "s#proxy_pass http://api:3001/api/;#proxy_pass http://${candidate}:3001/api/;#" \
+  sed "s#proxy_pass http://api:3001/api/;#proxy_pass http://${candidate_ip}:3001/api/;#" \
     "$original_conf" > "$candidate_conf"
-  if [[ "$(grep -Fc "proxy_pass http://${candidate}:3001/api/;" "$candidate_conf")" -ne 1 ]] \
+  if [[ "$(grep -Fc "proxy_pass http://${candidate_ip}:3001/api/;" "$candidate_conf")" -ne 1 ]] \
     || grep -Fq 'proxy_pass http://api:3001/api/;' "$candidate_conf"; then
     echo "API_WARM_HANDOFF_PROXY_REWRITE_REFUSED" >&2
     docker rm -f "$candidate" >/dev/null 2>&1 || true
