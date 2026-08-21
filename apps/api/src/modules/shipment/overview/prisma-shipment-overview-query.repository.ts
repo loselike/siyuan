@@ -520,11 +520,18 @@ export class PrismaShipmentOverviewQueryRepository implements ShipmentOverviewQu
     if (fieldMasks?.['agent-short-name'] || fieldMasks?.['agent-data']) delete (safeVisible as Partial<Shipment>).agentShortName;
     if (fieldMasks?.['agent-company-name'] || fieldMasks?.['agent-data']) delete (safeVisible as Partial<Shipment>).agentName;
     if (fieldMasks?.['agent-channel'] || fieldMasks?.['agent-data']) delete (safeVisible as Partial<Shipment>).routeAgentChannelName;
+    const agentIdentityMasked = Boolean(fieldMasks && (
+      fieldMasks['agent-short-name']
+      || fieldMasks['agent-company-name']
+      || fieldMasks['agent-channel']
+      || fieldMasks['agent-data']
+    ));
+    if ((!visibility.canViewAgentIdentity && !visibility.exposeWarehouseRouting) || agentIdentityMasked) {
+      safeVisible.invoiceTemplateOptions = safeVisible.invoiceTemplateOptions?.map((template) => ({ id: template.id }));
+    }
     if (fieldMasks?.['agent-data']) {
       delete (safeVisible as Partial<Shipment>).agentId;
       delete (safeVisible as Partial<Shipment>).agentWeightKg;
-      delete (safeVisible as Partial<Shipment>).invoiceTemplateAvailable;
-      delete (safeVisible as Partial<Shipment>).invoiceTemplateOptions;
     }
     if (fieldMasks?.['payable-cost']) {
       if (safeVisible.linePoolFinanceSummary) {

@@ -36,7 +36,7 @@ const agentDataKeys = new Set([
   'agent', 'agents', 'agentid', 'agentcode', 'agentdata', 'agentdetail', 'agentdetails',
   'agentweight', 'agentweightkg', 'agentprice', 'agentunitprice', 'agentamount', 'agentcost', 'agentcosts',
   'agentcurrency', 'agentcontact', 'agentcontacts', 'agentbank', 'agentbanks', 'agentbankaccount',
-  'invoiceagent', 'invoicetemplateavailable', 'invoicetemplateoptions'
+  'invoiceagent'
 ]);
 const payableCostKeys = new Set([
   'payablecost', 'payablecosts', 'payableamount', 'payableamounts', 'payabletotal',
@@ -135,6 +135,7 @@ export function isGlobalSensitiveFilePathBlocked(requestPath: string, state: Glo
   if (!/(?:export|download|attachment|voucher|template|\/file(?:\/|$)|\/image(?:\/|$)|shipment-label)/i.test(path)) return false;
   if (/\/api\/finance\/voucher-images$/i.test(path)) return false;
   const agentMasked = state['agent-short-name'] || state['agent-company-name'] || state['agent-channel'] || state['agent-data'];
+  if (/\/api\/shipments\/[^/]+\/invoice-template\/download$/i.test(path)) return false;
   if (/invoice-template/i.test(path)) return agentMasked;
   if (/\/shipments\/[^/]+\/invoice\/download$/i.test(path)) return agentMasked;
   if (/(?:\/labels?(?:\/|$)|tally-tasks\/[^/]+\/label(?:\/|$)|shipment-label)/i.test(path)) return false;
@@ -178,6 +179,12 @@ function fieldIsMasked(
   const agentMasked = state['agent-short-name'] || state['agent-company-name'] || state['agent-channel'] || state['agent-data'];
   const bankMasked = agentMasked || state['payable-cost'];
   const narrativeContext = /(?:audit|lineage|internal-flow|flow-log|notification)/i.test(requestPath);
+  const invoiceTemplateOptionContext = /(?:^|\.)invoicetemplateoptions(?:\.|$)/.test(ancestorPath);
+
+  // Shipment access grants template download independently from agent identity.
+  // Keep opaque template ids for selection, but never expose template names to
+  // a role whose agent fields are globally masked.
+  if (agentMasked && invoiceTemplateOptionContext && key === 'name') return true;
 
   // Quote diagnostics may contain a fixed list of provider errors. Keep the
   // response shape but never expose provider identifiers to a masked caller.

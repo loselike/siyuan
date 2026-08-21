@@ -4906,7 +4906,7 @@ export type AgentSettlementCycle = 'WEEKLY' | 'MONTHLY' | 'PER_SHIPMENT';
 
 export interface AgentInvoiceTemplateOption {
   id: string;
-  name: string;
+  name?: string;
 }
 
 export interface AgentInvoiceTemplate {

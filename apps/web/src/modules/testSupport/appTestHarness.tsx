@@ -663,7 +663,7 @@ const financePermissionDefinitions = [
   'finance:agent-bill:read', 'finance:agent-bill:import', 'finance:agent-bill:difference-manage', 'finance:agent-bill:difference-resolve', 'finance:agent-bill:archive', 'finance:agent-bill:reverse-archive'
 ].map((code) => ({ code, label: code, group: `财务管理 / ${code.split(':')[1]}` }));
 const financePermissionCodes = financePermissionDefinitions.map((item) => item.code);
-const systemRoleMatrix = {
+export const systemRoleMatrix = {
   availablePermissions: [
     { code: 'pricing:lookup:view', label: '进入报价查询', group: '报价查价 / 查价' },
     { code: 'pricing:lookup:amazon', label: '亚马逊查询', group: '报价查价 / 查价' },

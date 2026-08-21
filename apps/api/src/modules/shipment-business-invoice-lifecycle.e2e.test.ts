@@ -13,9 +13,10 @@ function parseBinary(response: SuperAgentResponse, callback: (error: Error | nul
 describe('Shipment business invoice lifecycle API', () => {
   const app = setupE2eApp();
 
-  it('keeps upload, template download, invoice download, file, permission, and audit contracts unchanged', async () => {
+  it('inherits template download from visible shipment access while preserving upload, scope, file, and audit contracts', async () => {
     const adminToken = await app.loginAs('admin');
     const customerToken = await app.loginAs('customer');
+    const financeToken = await app.loginAs('finance');
 
     for (const path of [
       '/api/shipments/s-seed-1/invoice-template/download',
@@ -25,12 +26,22 @@ describe('Shipment business invoice lifecycle API', () => {
         .get(path)
         .expect(401)
         .expect((response) => expect(response.body.message).toBe('缺少登录凭证'));
-      await request(app.getHttpServer())
-        .get(path)
-        .set('Authorization', app.auth(customerToken))
-        .expect(403)
-        .expect((response) => expect(response.body.message).toBe('没有访问权限'));
     }
+    await request(app.getHttpServer())
+      .get('/api/shipments/s-seed-1/invoice-template/download')
+      .set('Authorization', app.auth(customerToken))
+      .expect(403)
+      .expect((response) => expect(response.body.message).toBe('没有访问权限'));
+    await request(app.getHttpServer())
+      .get('/api/shipments/s-seed-1/invoice/download')
+      .set('Authorization', app.auth(customerToken))
+      .expect(403)
+      .expect((response) => expect(response.body.message).toBe('没有访问权限'));
+    await request(app.getHttpServer())
+      .get('/api/shipments/s-seed-1/invoice-template/download')
+      .set('Authorization', app.auth(financeToken))
+      .expect(403)
+      .expect((response) => expect(response.body.message).toBe('没有访问权限'));
 
     await request(app.getHttpServer())
       .post('/api/shipments/s-seed-1/invoice/upload')
@@ -134,6 +145,53 @@ describe('Shipment business invoice lifecycle API', () => {
       .expect('Cache-Control', 'private, no-store')
       .expect((response) => expect(response.body).toEqual(invoiceBytes));
 
+    await request(app.getHttpServer())
+      .put('/api/system/roles/UG_BUSINESS/permissions')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        permissions: [
+          'business:shipment:list'
+        ]
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.permissions).toContain('business:shipment:list');
+        expect(response.body.permissions).not.toContain('business:order-entry:invoice-upload');
+      });
+    const operatorToken = await app.loginAs('operator');
+
+    await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        const ownShipment = response.body.find((shipment: { id: string }) => shipment.id === 's-seed-1');
+        expect(ownShipment).toEqual(expect.objectContaining({
+          invoiceTemplateAvailable: true,
+          invoiceTemplateOptions: [{ id: 'phase22-primary' }]
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/s-seed-1/invoice-template/download?templateId=phase22-primary')
+      .set('Authorization', app.auth(operatorToken))
+      .buffer(true)
+      .parse(parseBinary)
+      .expect(200)
+      .expect((response) => expect(response.body).toEqual(templateBytes));
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/s-seed-2/invoice-template/download')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(404)
+      .expect((response) => expect(response.body.message).toBe('运单不存在'));
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/s-seed-1/invoice/upload')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(403)
+      .expect((response) => expect(response.body.message).toBe('没有访问权限'));
+
     for (const action of ['shipment.invoice_template.download', 'shipment.business_invoice.upload', 'shipment.business_invoice.download']) {
       await request(app.getHttpServer())
         .get('/api/system/audit-logs')
@@ -146,5 +204,19 @@ describe('Shipment business invoice lifecycle API', () => {
           ]));
         });
     }
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs')
+      .query({ action: 'shipment.invoice_template.download' })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'shipment.invoice_template.download',
+            target: 's-seed-1',
+            actorUsername: 'operator'
+          })
+        ]));
+      });
   });
 });

@@ -21459,7 +21459,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async downloadShipmentInvoiceTemplate(principal: Principal, shipmentId: string, templateId?: string): Promise<{ extension: '.xls' | '.xlsx'; buffer: Buffer }> {
-    const shipment = await this.getVisibleShipment(principal, shipmentId);
+    const shipment = await this.getVisibleShipment(principal, shipmentId, true);
     if (!canDownloadShipmentInvoiceTemplate(shipment.status)) {
       throw new BadRequestException('仅已排货及之后状态的运单可以下载发票模板');
     }
@@ -26254,11 +26254,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (fieldMasks?.['agent-short-name'] || fieldMasks?.['agent-data']) delete (safeVisible as Partial<Shipment>).agentShortName;
     if (fieldMasks?.['agent-company-name'] || fieldMasks?.['agent-data']) delete (safeVisible as Partial<Shipment>).agentName;
     if (fieldMasks?.['agent-channel'] || fieldMasks?.['agent-data']) delete (safeVisible as Partial<Shipment>).routeAgentChannelName;
+    const agentIdentityMasked = Boolean(fieldMasks && (
+      fieldMasks['agent-short-name']
+      || fieldMasks['agent-company-name']
+      || fieldMasks['agent-channel']
+      || fieldMasks['agent-data']
+    ));
+    if ((!marketVisibility.canViewAgentIdentity && !marketVisibility.exposeWarehouseRouting) || agentIdentityMasked) {
+      safeVisible.invoiceTemplateOptions = safeVisible.invoiceTemplateOptions?.map((template) => ({ id: template.id }));
+    }
     if (fieldMasks?.['agent-data']) {
       delete (safeVisible as Partial<Shipment>).agentId;
       delete (safeVisible as Partial<Shipment>).agentWeightKg;
-      delete (safeVisible as Partial<Shipment>).invoiceTemplateAvailable;
-      delete (safeVisible as Partial<Shipment>).invoiceTemplateOptions;
     }
     if (fieldMasks?.['payable-cost']) {
       if (safeVisible.linePoolFinanceSummary) {
