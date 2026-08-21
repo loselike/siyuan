@@ -13,7 +13,7 @@ const printCurrent = process.argv.includes('--print-current');
 const skipLint = process.argv.includes('--skip-lint');
 const compact = process.argv.includes('--compact');
 const selfTest = process.argv.includes('--self-test');
-const nakedBodyDecoratorsMax = 225;
+const nakedBodyDecoratorsMax = 220;
 const rootAppModuleDebtMax = Object.freeze({
   lines: 414,
   directControllers: 40,
@@ -51,6 +51,36 @@ const routePolicyEvidence = {
 };
 
 const runtimeInputEvidence = [
+  {
+    file: 'apps/api/src/modules/system/identity/system-identity-admin.controller.ts',
+    controller: 'SystemIdentityAdminController',
+    handler: 'createRole',
+    schema: 'systemRoleGroupInputSchema'
+  },
+  {
+    file: 'apps/api/src/modules/system/identity/system-identity-admin.controller.ts',
+    controller: 'SystemIdentityAdminController',
+    handler: 'updateRole',
+    schema: 'systemRoleGroupInputSchema'
+  },
+  {
+    file: 'apps/api/src/modules/system/identity/system-identity-admin.controller.ts',
+    controller: 'SystemIdentityAdminController',
+    handler: 'updateRoleEnabled',
+    schema: 'systemRoleEnabledInputSchema'
+  },
+  {
+    file: 'apps/api/src/modules/system/identity/system-identity-admin.controller.ts',
+    controller: 'SystemIdentityAdminController',
+    handler: 'updateRolePermissions',
+    schema: 'systemRolePermissionsInputSchema'
+  },
+  {
+    file: 'apps/api/src/modules/system/identity/system-identity-admin.controller.ts',
+    controller: 'SystemIdentityAdminController',
+    handler: 'copyRolePermissions',
+    schema: 'systemRolePermissionsCopyInputSchema'
+  },
   {
     file: 'apps/api/src/modules/warehouse/package/warehouse-package-lifecycle.controller.ts',
     controller: 'WarehousePackageLifecycleController',

@@ -55,7 +55,11 @@
 
 ## 交接
 
-- 阻塞：需要用户确认只针对畸形输入的错误契约修正；合法 UI 请求与业务流程不受影响。
+- 授权：用户已明确授权把已确认的畸形岗位/权限请求改为稳定 400；合法 UI 请求与业务流程不受影响。
 - 迁移前证据：五条路由均保持未登录 401、财务岗位 403；管理员合法创建、修改、启停、保存权限、复制权限和未知字段忽略全部通过，最终岗位/权限状态可恢复。
 - 已确认的既有危险行为：`label` 数字、`permissions` 数字、`sourceRoleKey` 数字分别触发未控制 500；根数组或空 body 可让启停接口以 200 把岗位停用，并可让权限保存接口以 200 清空权限；字符串 `enabled: "true"` 同样会以 200 把岗位停用。原始非法 JSON 已由 body parser 稳定拒绝为 400。
-- 准确下一步：取得授权后把上述字段类型错误、根数组、缺少 `enabled/permissions` 和字符串布尔值统一改为稳定 400；保留合法字段、未知字段忽略、权限先行、成功响应、审计与持久化语义，再接共享 schema 和精确门禁。
+- 调用方证据：仓内运行时调用均经过 Web 强类型 client/AntD 校验；启停传真布尔值，权限保存始终传数组，复制权限始终传经验证的来源岗位。未发现依赖空 body、字符串布尔值或数字权限的仓内调用方；第三方调用方在仓内无法证明。
+- 已实施：五条路由接入共享 runtime schema，根数组、缺少必填字段、字符串布尔值和字段类型错误均稳定 400；合法数字/数字字符串排序、未知字段忽略、权限先行、成功响应、审计与持久化语义已由定向样本保护；裸 `@Body()` 门禁从 225 降至 220。
+- 已验证：Shared schema 13/13，五路由 characterization 1/1，System Identity E2E/Controller/Service 7/7，Shared/API/Web typecheck、448 路由架构门禁、governance/context/security 定向门与 `git diff --check` 通过。
+- 独立高风险审查：无 P0/P1；非阻断 P2 为仓外调用方无法证明是否依赖非契约 `null`。决策是保留 `description/site:null` 的清空语义，并将 `sortOrder/enabled/permissions:null` 作为用户已授权的非契约畸形输入稳定拒绝为 400；已补精确 schema 决策测试。
+- 准确下一步：完成独立高风险审查，通过后合并主干 CI，再精确发布 Shared + API + Web 至 47（无 migration/seed）并做 401/403/400、源码/provenance/镜像/health/日志/锁/recovery 验收。

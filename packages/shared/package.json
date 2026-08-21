@@ -34,6 +34,10 @@
       "types": "./dist/runtime-schema.d.ts",
       "import": "./dist/runtime-schema.js"
     },
+    "./system-identity-input": {
+      "types": "./dist/system-identity-input.d.ts",
+      "import": "./dist/system-identity-input.js"
+    },
     "./permissions": {
       "types": "./dist/permissions.d.ts",
       "import": "./dist/permissions.js"

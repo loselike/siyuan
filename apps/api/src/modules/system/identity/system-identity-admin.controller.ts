@@ -1,5 +1,13 @@
 import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Req } from '@nestjs/common';
-import type { PermissionKey, Principal, RoleKey } from '../../rbac.js';
+import {
+  systemRoleEnabledInputSchema,
+  systemRoleGroupInputSchema,
+  systemRolePermissionsCopyInputSchema,
+  systemRolePermissionsInputSchema,
+  type RolePermissionsCopyInput,
+  type RolePermissionsUpdateInput
+} from '@siyuan/shared/system-identity-input';
+import type { Principal, RoleKey } from '../../rbac.js';
 import type {
   EnabledUpdateInput,
   RoleGroupInput,
@@ -11,6 +19,7 @@ import type {
   StaffAccountUpdateInput
 } from './system-identity-admin.service.js';
 import { RequirePermission } from '../../require-permission.decorator.js';
+import { RuntimeInputPipe } from '../../runtime-input.pipe.js';
 import { SystemIdentityAdminService } from './system-identity-admin.service.js';
 
 @Controller()
@@ -28,19 +37,19 @@ export class SystemIdentityAdminController {
 
   @Post('system/roles')
   @RequirePermission('system:user-groups:create')
-  createRole(@Req() request: { user: Principal }, @Body() body: RoleGroupInput) {
+  createRole(@Req() request: { user: Principal }, @Body(new RuntimeInputPipe(systemRoleGroupInputSchema)) body: RoleGroupInput) {
     return this.service.createRole(request.user, body);
   }
 
   @Put('system/roles/:role')
   @RequirePermission('system:user-groups:update')
-  updateRole(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body() body: RoleGroupInput) {
+  updateRole(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body(new RuntimeInputPipe(systemRoleGroupInputSchema)) body: RoleGroupInput) {
     return this.service.updateRole(request.user, role, body);
   }
 
   @Put('system/roles/:role/enabled')
   @RequirePermission('system:user-groups:enable')
-  updateRoleEnabled(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body() body: EnabledUpdateInput) {
+  updateRoleEnabled(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body(new RuntimeInputPipe(systemRoleEnabledInputSchema)) body: EnabledUpdateInput) {
     return this.service.updateRoleEnabled(request.user, role, body);
   }
 
@@ -119,9 +128,9 @@ export class SystemIdentityAdminController {
   updateRolePermissions(
     @Req() request: { user: Principal },
     @Param('role') role: RoleKey,
-    @Body() body: { permissions?: PermissionKey[] }
+    @Body(new RuntimeInputPipe(systemRolePermissionsInputSchema)) body: RolePermissionsUpdateInput
   ) {
-    return this.service.updateRolePermissions(request.user, role, body.permissions ?? []);
+    return this.service.updateRolePermissions(request.user, role, body.permissions);
   }
 
   @Put('system/roles/:role/permissions/copy')
@@ -129,7 +138,7 @@ export class SystemIdentityAdminController {
   copyRolePermissions(
     @Req() request: { user: Principal },
     @Param('role') role: RoleKey,
-    @Body() body: { sourceRoleKey?: RoleKey }
+    @Body(new RuntimeInputPipe(systemRolePermissionsCopyInputSchema)) body: RolePermissionsCopyInput
   ) {
     return this.service.copyRolePermissions(request.user, role, body.sourceRoleKey);
   }

@@ -33,6 +33,42 @@ describe('System role runtime input characterization', () => {
         });
     }
 
+    await request(app.getHttpServer())
+      .put('/api/system/roles/runtime-input-missing')
+      .set('Authorization', app.auth(adminToken))
+      .send({ label: '不存在岗位' })
+      .expect(404)
+      .expect((response) => {
+        expect(response.body.message).toBe('用户组不存在');
+      });
+
+    await request(app.getHttpServer())
+      .put('/api/system/roles/runtime-input-missing/enabled')
+      .set('Authorization', app.auth(adminToken))
+      .send({ enabled: true })
+      .expect(404)
+      .expect((response) => {
+        expect(response.body.message).toBe('用户组不存在');
+      });
+
+    await request(app.getHttpServer())
+      .put('/api/system/roles/runtime-input-missing/permissions')
+      .set('Authorization', app.auth(adminToken))
+      .send({ permissions: [] })
+      .expect(404)
+      .expect((response) => {
+        expect(response.body.message).toBe('用户组不存在');
+      });
+
+    await request(app.getHttpServer())
+      .put('/api/system/roles/runtime-input-missing/permissions/copy')
+      .set('Authorization', app.auth(adminToken))
+      .send({ sourceRoleKey: 'WAREHOUSE' })
+      .expect(404)
+      .expect((response) => {
+        expect(response.body.message).toBe('目标用户组不存在');
+      });
+
     const created = await request(app.getHttpServer())
       .post('/api/system/roles')
       .set('Authorization', app.auth(adminToken))
@@ -110,6 +146,36 @@ describe('System role runtime input characterization', () => {
         expect(response.body).not.toHaveProperty('ignoredField');
       });
 
+    await request(app.getHttpServer())
+      .put(`/api/system/roles/${role}/enabled`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ enabled: false })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.enabled).toBe(false);
+      });
+
+    await request(app.getHttpServer())
+      .put(`/api/system/roles/${role}/enabled`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ enabled: true })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .put(`/api/system/roles/${role}/permissions`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ permissions: [] })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.permissions).toEqual([]);
+      });
+
+    await request(app.getHttpServer())
+      .put(`/api/system/roles/${role}/permissions`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ permissions: ['warehouse:today-receipt:view'] })
+      .expect(200);
+
     for (const [method, path] of [
       ['post', '/api/system/roles'],
       ['put', `/api/system/roles/${role}`],
@@ -133,7 +199,7 @@ describe('System role runtime input characterization', () => {
       .send([])
       .expect(400)
       .expect((response) => {
-        expect(response.body.message).toBe('用户组名称不能为空');
+        expect(response.body.message).toBe('请求体格式不正确');
       });
 
     await request(app.getHttpServer())
@@ -142,25 +208,25 @@ describe('System role runtime input characterization', () => {
       .send([])
       .expect(400)
       .expect((response) => {
-        expect(response.body.message).toBe('用户组名称不能为空');
+        expect(response.body.message).toBe('请求体格式不正确');
       });
 
     await request(app.getHttpServer())
       .put(`/api/system/roles/${role}/enabled`)
       .set('Authorization', app.auth(adminToken))
       .send([])
-      .expect(200)
+      .expect(400)
       .expect((response) => {
-        expect(response.body.enabled).toBe(false);
+        expect(response.body.message).toBe('请求体格式不正确');
       });
 
     await request(app.getHttpServer())
       .put(`/api/system/roles/${role}/permissions`)
       .set('Authorization', app.auth(adminToken))
       .send([])
-      .expect(200)
+      .expect(400)
       .expect((response) => {
-        expect(response.body.permissions).toEqual([]);
+        expect(response.body.message).toBe('请求体格式不正确');
       });
 
     await request(app.getHttpServer())
@@ -169,7 +235,7 @@ describe('System role runtime input characterization', () => {
       .send([])
       .expect(400)
       .expect((response) => {
-        expect(response.body.message).toBe('请选择权限来源用户组');
+        expect(response.body.message).toBe('请求体格式不正确');
       });
 
     await request(app.getHttpServer())
@@ -188,51 +254,63 @@ describe('System role runtime input characterization', () => {
       .post('/api/system/roles')
       .set('Authorization', app.auth(adminToken))
       .send({ label: 61 })
-      .expect(500);
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('用户组名称格式不正确');
+      });
 
     await request(app.getHttpServer())
       .put(`/api/system/roles/${role}`)
       .set('Authorization', app.auth(adminToken))
       .send({ label: 62 })
-      .expect(500);
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('用户组名称格式不正确');
+      });
 
     await request(app.getHttpServer())
       .put(`/api/system/roles/${role}/permissions`)
       .set('Authorization', app.auth(adminToken))
       .send({ permissions: 61 })
-      .expect(500);
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('权限列表格式不正确');
+      });
 
     await request(app.getHttpServer())
       .put(`/api/system/roles/${role}/permissions/copy`)
       .set('Authorization', app.auth(adminToken))
       .send({ sourceRoleKey: 61 })
-      .expect(500);
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('权限来源用户组格式不正确');
+      });
 
     await request(app.getHttpServer())
       .put(`/api/system/roles/${role}/enabled`)
       .set('Authorization', app.auth(adminToken))
       .send({ enabled: 'true' })
-      .expect(200)
+      .expect(400)
       .expect((response) => {
-        expect(response.body.enabled).toBe(false);
+        expect(response.body.message).toBe('启用状态格式不正确');
       });
 
     await request(app.getHttpServer())
       .put(`/api/system/roles/${role}/enabled`)
       .set('Authorization', app.auth(adminToken))
       .send({})
-      .expect(200)
+      .expect(400)
       .expect((response) => {
-        expect(response.body.enabled).toBe(false);
+        expect(response.body.message).toBe('请选择启用状态');
       });
 
     await request(app.getHttpServer())
       .put(`/api/system/roles/${role}/permissions`)
       .set('Authorization', app.auth(adminToken))
       .send({})
-      .expect(200)
+      .expect(400)
       .expect((response) => {
-        expect(response.body.permissions).toEqual([]);
+        expect(response.body.message).toBe('请提交权限列表');
       });
 
     await request(app.getHttpServer())
