@@ -2,7 +2,10 @@ import { Body, Controller, Inject, Param, Patch, Post, Put, Req } from '@nestjs/
 import {
   warehouseManualReceiptCreateInputSchema,
   warehousePackageCreateInputSchema,
+  warehousePackageExceptionInputSchema,
+  warehousePackageRemarkInputSchema,
   warehousePackageSplitInputSchema,
+  warehousePackageUpdateInputSchema,
   warehouseSameSpecReplenishInputSchema
 } from '@siyuan/shared/warehouse-input';
 import { RequirePermission } from '../../require-permission.decorator.js';
@@ -68,7 +71,7 @@ export class WarehousePackageLifecycleController {
   updateWarehousePackage(
     @Req() request: { user: Principal },
     @Param('id') id: string,
-    @Body() body: WarehousePackageUpdateInput
+    @Body(new RuntimeInputPipe(warehousePackageUpdateInputSchema)) body: WarehousePackageUpdateInput
   ) {
     return this.warehousePackageLifecycle.update(request.user, id, body);
   }
@@ -78,7 +81,7 @@ export class WarehousePackageLifecycleController {
   updateWarehousePackageRemark(
     @Req() request: { user: Principal },
     @Param('id') id: string,
-    @Body() body: WarehousePackageRemarkInput
+    @Body(new RuntimeInputPipe(warehousePackageRemarkInputSchema)) body: WarehousePackageRemarkInput
   ) {
     return this.warehousePackageLifecycle.updateRemark(request.user, id, body);
   }
@@ -88,7 +91,7 @@ export class WarehousePackageLifecycleController {
   updateWarehousePackageException(
     @Req() request: { user: Principal },
     @Param('id') id: string,
-    @Body() body: WarehousePackageExceptionInput
+    @Body(new RuntimeInputPipe(warehousePackageExceptionInputSchema)) body: WarehousePackageExceptionInput
   ) {
     return this.warehousePackageLifecycle.updateException(request.user, id, body);
   }

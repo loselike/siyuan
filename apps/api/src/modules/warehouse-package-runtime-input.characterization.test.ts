@@ -2,7 +2,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { setupE2eApp } from './test-support/e2e-harness.js';
 
-describe('warehouse package legacy runtime input behavior', () => {
+describe('warehouse package runtime input behavior', () => {
   const app = setupE2eApp();
 
   it('preserves authentication and permission checks before parsing all five bodies', async () => {
@@ -53,31 +53,57 @@ describe('warehouse package legacy runtime input behavior', () => {
       .patch(`/api/warehouse/packages/${packageId}`)
       .set('Authorization', app.auth(adminToken))
       .send({ customerCode: 123 })
-      .expect(500);
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('客户编号格式不正确'));
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/packages/${packageId}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ packageCount: true })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('件数格式不正确'));
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/packages/${packageId}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ weightKg: {} })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('重量格式不正确'));
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/packages/${packageId}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ lengthCm: [50] })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('长宽高格式不正确'));
 
     await request(app.getHttpServer())
       .put(`/api/warehouse/packages/${packageId}/remark`)
       .set('Authorization', app.auth(adminToken))
       .send({ remark: 123 })
-      .expect(500);
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('备注格式不正确'));
 
     await request(app.getHttpServer())
       .patch(`/api/warehouse/packages/${packageId}/exception`)
       .set('Authorization', app.auth(adminToken))
       .send({ manualException: 123 })
-      .expect(500);
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('异常说明格式不正确'));
 
     await request(app.getHttpServer())
       .post('/api/warehouse/in-stock/batch-delete')
       .set('Authorization', app.auth(adminToken))
       .send({ ids: packageId, reason: '非法 ids 结构' })
-      .expect(500);
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('包裹编号格式不正确'));
 
     await request(app.getHttpServer())
       .post('/api/warehouse/today-receipts/batch-delete')
       .set('Authorization', app.auth(adminToken))
       .send({ ids: packageId, reason: '非法 ids 结构' })
-      .expect(500);
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('包裹编号格式不正确'));
 
     await request(app.getHttpServer())
       .post('/api/warehouse/in-stock/batch-delete')
@@ -163,6 +189,62 @@ describe('warehouse package legacy runtime input behavior', () => {
           expect.objectContaining({ id: todayPackage.body.id }),
           expect.objectContaining({ id: inStockPackage.body.id })
         ]));
+      });
+  });
+
+  it('preserves legacy numeric-string coercion and ignores unknown update fields', async () => {
+    const adminToken = await app.loginAs('admin');
+    const authorization = app.auth(adminToken);
+    const trackingNo = `RUNTIME-COERCE-${Date.now()}`;
+    const created = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', authorization)
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: trackingNo,
+        expectedTotalPackageCount: 1,
+        packageIndex: 1,
+        packageCount: 1,
+        weightKg: 5,
+        lengthCm: 40,
+        widthCm: 30,
+        heightCm: 20
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/packages/${created.body.id}`)
+      .set('Authorization', authorization)
+      .send({
+        customerCode: null,
+        customerOrderNo: null,
+        domesticTrackingNo: null,
+        expectedTotalPackageCount: '4.9',
+        packageIndex: '2.9',
+        packageCount: '2.9',
+        weightKg: '6.5',
+        lengthCm: '50',
+        widthCm: '40',
+        heightCm: '30',
+        ignoredLegacyField: 'must not leak'
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          id: created.body.id,
+          customerCode: '9409',
+          customerOrderNo: '9409',
+          domesticTrackingNo: trackingNo,
+          expectedTotalPackageCount: 4,
+          packageIndex: 2,
+          packageCount: 2,
+          weightKg: 6.5,
+          lengthCm: 50,
+          widthCm: 40,
+          heightCm: 30
+        }));
+        expect(response.body).not.toHaveProperty('ignoredLegacyField');
       });
   });
 });

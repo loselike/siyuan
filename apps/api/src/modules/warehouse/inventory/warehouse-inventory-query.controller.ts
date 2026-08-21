@@ -1,8 +1,10 @@
 import { Body, Controller, Get, Inject, Post, Query, Req } from '@nestjs/common';
 import type { WarehouseInStockPageQuery, WarehouseInStockQuery, WarehousePackageDeleteInput, WarehouseTodayQuery } from '@siyuan/shared';
+import { warehousePackageDeleteInputSchema } from '@siyuan/shared/warehouse-input';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
+import { RuntimeInputPipe } from '../../runtime-input.pipe.js';
 import { WarehouseInventoryQueryService } from './warehouse-inventory-query.service.js';
 
 @Controller()
@@ -46,13 +48,19 @@ export class WarehouseInventoryQueryController {
 
   @Post('warehouse/today-receipts/batch-delete')
   @RequirePermission('warehouse:today-receipt:delete')
-  deleteTodayReceiptPackages(@Req() request: { user: Principal }, @Body() body: WarehousePackageDeleteInput) {
+  deleteTodayReceiptPackages(
+    @Req() request: { user: Principal },
+    @Body(new RuntimeInputPipe(warehousePackageDeleteInputSchema)) body: WarehousePackageDeleteInput
+  ) {
     return this.auditedRepository.deleteWarehousePackages(request.user, body);
   }
 
   @Post('warehouse/in-stock/batch-delete')
   @RequirePermission('warehouse:in-stock:delete')
-  deleteInStockPackages(@Req() request: { user: Principal }, @Body() body: WarehousePackageDeleteInput) {
+  deleteInStockPackages(
+    @Req() request: { user: Principal },
+    @Body(new RuntimeInputPipe(warehousePackageDeleteInputSchema)) body: WarehousePackageDeleteInput
+  ) {
     return this.auditedRepository.deleteWarehousePackages(request.user, body);
   }
 

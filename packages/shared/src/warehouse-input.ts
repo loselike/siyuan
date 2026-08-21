@@ -6,13 +6,16 @@ import type {
   WarehouseManualReceiptCartonSpecInput,
   WarehouseManualReceiptCreateInput,
   WarehousePackageCreateInput,
+  WarehousePackageDeleteInput,
   WarehousePackageSplitInput,
+  WarehousePackageUpdateInput,
   WarehouseSameSpecReplenishInput
 } from './warehouse.js';
 
 const SUPPLEMENT_COUNT_ERROR = '补录箱数必须为 1 至 500 的正整数';
 const REQUEST_ID_ERROR = '页面已更新，请刷新后重新发起补录';
 const MANUAL_RECEIPT_CARTON_SPECS_ERROR = '请至少填写一条箱规';
+const REQUEST_BODY_ERROR = '请求体格式不正确';
 
 export const warehouseSameSpecReplenishInputSchema = defineRuntimeSchema<WarehouseSameSpecReplenishInput>((value) => {
   const input = isRecord(value) ? value : {};
@@ -125,8 +128,147 @@ export const warehouseManualReceiptCreateInputSchema = defineRuntimeSchema<Wareh
   };
 });
 
+export const warehousePackageUpdateInputSchema = defineRuntimeSchema<WarehousePackageUpdateInput>((value) => {
+  const input = parseRecord(value);
+  const customerCode = parseUpdateIdentityString(input.customerCode, '客户编号格式不正确');
+  const customerOrderNo = parseUpdateIdentityString(input.customerOrderNo, '客户单号格式不正确');
+  const domesticTrackingNo = parseUpdateIdentityString(input.domesticTrackingNo, '快递单号格式不正确');
+  const combinedOrderNo = parseUpdateIdentityString(input.combinedOrderNo, '合并单号格式不正确');
+  const expectedTotalPackageCount = parseOptionalLegacyCount(input.expectedTotalPackageCount, '预计总箱数格式不正确');
+  const packageIndex = parseOptionalLegacyCount(input.packageIndex, '箱序号格式不正确');
+  const packageCount = parseOptionalLegacyCount(input.packageCount, '件数格式不正确');
+  const weightKg = parseOptionalLegacyMeasurement(input.weightKg, '重量格式不正确');
+  const lengthCm = parseOptionalLegacyMeasurement(input.lengthCm, '长宽高格式不正确');
+  const widthCm = parseOptionalLegacyMeasurement(input.widthCm, '长宽高格式不正确');
+  const heightCm = parseOptionalLegacyMeasurement(input.heightCm, '长宽高格式不正确');
+  const scanTime = parseUpdateScanTime(input.scanTime);
+  const remark = parseUpdateText(input.remark, '备注格式不正确');
+  const manualException = parseUpdateText(input.manualException, '异常说明格式不正确');
+
+  return {
+    ...(customerCode === undefined ? {} : { customerCode }),
+    ...(customerOrderNo === undefined ? {} : { customerOrderNo }),
+    ...(domesticTrackingNo === undefined ? {} : { domesticTrackingNo }),
+    ...(combinedOrderNo === undefined ? {} : { combinedOrderNo }),
+    ...(expectedTotalPackageCount === undefined ? {} : { expectedTotalPackageCount }),
+    ...(packageIndex === undefined ? {} : { packageIndex }),
+    ...(packageCount === undefined ? {} : { packageCount }),
+    ...(weightKg === undefined ? {} : { weightKg }),
+    ...(lengthCm === undefined ? {} : { lengthCm }),
+    ...(widthCm === undefined ? {} : { widthCm }),
+    ...(heightCm === undefined ? {} : { heightCm }),
+    ...(scanTime === undefined ? {} : { scanTime }),
+    ...(remark === undefined ? {} : { remark }),
+    ...(manualException === undefined ? {} : { manualException })
+  };
+});
+
+export const warehousePackageRemarkInputSchema = defineRuntimeSchema<{ remark?: string }>((value) => {
+  const input = parseRecord(value);
+  const remark = parseNullableOptionalText(input.remark, '备注格式不正确');
+  return remark === undefined ? {} : { remark };
+});
+
+export const warehousePackageExceptionInputSchema = defineRuntimeSchema<{ manualException?: string }>((value) => {
+  const input = parseRecord(value);
+  const manualException = parseNullableOptionalText(input.manualException, '异常说明格式不正确');
+  return manualException === undefined ? {} : { manualException };
+});
+
+export const warehousePackageDeleteInputSchema = defineRuntimeSchema<WarehousePackageDeleteInput>((value) => {
+  const input = parseRecord(value);
+  const idsValue = input.ids;
+  if (idsValue !== undefined && idsValue !== null && !Array.isArray(idsValue)) {
+    throw new RuntimeInputValidationError('包裹编号格式不正确');
+  }
+  const ids = (idsValue ?? []).map((id) => {
+    if (typeof id !== 'string') {
+      throw new RuntimeInputValidationError('包裹编号格式不正确');
+    }
+    return id;
+  });
+  if (input.reason !== undefined && input.reason !== null && typeof input.reason !== 'string') {
+    throw new RuntimeInputValidationError('删除原因格式不正确');
+  }
+  return {
+    ids,
+    reason: typeof input.reason === 'string' ? input.reason : ''
+  };
+});
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new RuntimeInputValidationError(REQUEST_BODY_ERROR);
+  }
+  return value;
+}
+
+function parseUpdateIdentityString(value: unknown, message: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new RuntimeInputValidationError(message);
+  }
+  return value;
+}
+
+function parseUpdateText(value: unknown, message: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new RuntimeInputValidationError(message);
+  }
+  return value;
+}
+
+function parseNullableOptionalText(value: unknown, message: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new RuntimeInputValidationError(message);
+  }
+  return value;
+}
+
+function parseUpdateScanTime(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return '';
+  if (typeof value !== 'string') {
+    throw new RuntimeInputValidationError('扫描时间格式不正确');
+  }
+  return value;
+}
+
+function parseOptionalLegacyCount(value: unknown, message: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = parseLegacyNumberInput(value, message, 1);
+  const normalized = Math.max(1, Math.floor(parsed || 1));
+  if (!Number.isFinite(normalized)) {
+    throw new RuntimeInputValidationError(message);
+  }
+  return normalized;
+}
+
+function parseOptionalLegacyMeasurement(value: unknown, message: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = parseLegacyNumberInput(value, message, 0);
+  if (!Number.isFinite(parsed)) {
+    throw new RuntimeInputValidationError(message);
+  }
+  return parsed || 0;
+}
+
+function parseLegacyNumberInput(value: unknown, message: string, emptyValue: number): number {
+  if (value === null || (typeof value === 'string' && value.trim() === '')) return emptyValue;
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw new RuntimeInputValidationError(message);
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new RuntimeInputValidationError(message);
+  }
+  return parsed;
 }
 
 function parseSupplementCount(value: unknown): number {
