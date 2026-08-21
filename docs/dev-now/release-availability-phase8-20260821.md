@@ -50,3 +50,9 @@
 - 标准 47 发布已改为 API warm handoff：候选容器健康且 Web 可解析后才临时切 Nginx；候选路由可用后替换 canonical；canonical 健康后恢复原 Nginx，再排空并删除候选。候选或临时路由在替换前失败会回滚并保留旧 API。
 - 定向 Web 10/10、warm handoff 三分支 shell 测试、三端 typecheck、448 路由/无新增 lint 债务、governance、shell 语法与 `git diff --check` 已通过。
 - 47 当前 Web 容器只读预检确认 `getent hosts api`、容器内 `/api/health` 和唯一 canonical `proxy_pass` 均可用；尚待主干 CI 镜像和真实 cutover 连续可用验收。
+
+## 首次真实 cutover 反馈
+
+- `f22bdd83` 首次标准提升在候选 API 健康后、任何容器替换前因旧 Web 无法解析 Compose one-off 候选容器名失败关闭；旧 API/Web 容器 ID 与 digest 未变，候选已删除、Nginx 已保持 canonical、公网 health 200。
+- 已核对远端源码与 `f22bdd83` 三类 fingerprint 一致并清除精确 recovery marker，锁恢复 free；不把该失败误报为完成。
+- 修正方向：不依赖 one-off DNS 名，读取候选在 Compose 网络的 IPv4，经旧 Web 直连健康验证后短暂写入 Nginx；仍保留原健康门、回滚和写请求不重放边界。

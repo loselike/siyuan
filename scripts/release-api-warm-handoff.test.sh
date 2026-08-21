@@ -37,13 +37,18 @@ fi
 if [[ "${1:-}" == exec && "${2:-}" == api-new && "${3:-}" == node ]]; then
   exit 0
 fi
-if [[ "${1:-}" == exec && "${2:-}" == web-1 && "${3:-}" == getent ]]; then
+if [[ "${1:-}" == inspect && "${2:-}" == --format && "${4:-}" == siyuan-api-warm-token-123 ]]; then
+  echo 172.19.0.99
   exit 0
 fi
 if [[ "${1:-}" == exec && "${2:-}" == web-1 && "${3:-}" == nginx ]]; then
   exit 0
 fi
 if [[ "${1:-}" == exec && "${2:-}" == web-1 && "${3:-}" == wget ]]; then
+  if [[ "$*" == *'http://172.19.0.99:3001/api/health'* ]]; then
+    [[ "${FAIL_CANDIDATE_CONNECT:-false}" != true ]]
+    exit
+  fi
   current_route="$(sed -n '1p' "$FAKE_DOCKER_STATE/current-route" 2>/dev/null || true)"
   if [[ "$current_route" == candidate && "${FAIL_CANDIDATE_ROUTE:-false}" == true ]]; then
     exit 1
@@ -56,7 +61,7 @@ if [[ "${1:-}" == cp && "${2:-}" == web-1:/etc/nginx/conf.d/default.conf ]]; the
   exit 0
 fi
 if [[ "${1:-}" == cp && "${3:-}" == web-1:/etc/nginx/conf.d/default.conf ]]; then
-  if grep -Fq 'siyuan-api-warm-token-123:3001' "$2"; then
+  if grep -Fq '172.19.0.99:3001' "$2"; then
     touch "$FAKE_DOCKER_STATE/routed-candidate"
     printf '%s\n' candidate > "$FAKE_DOCKER_STATE/current-route"
   else
@@ -112,6 +117,18 @@ fi
 
 rm -f "$FAKE_DOCKER_STATE"/* "$FAKE_DOCKER_LOG"
 unset FAIL_CANDIDATE
+FAIL_CANDIDATE_CONNECT=true
+export FAIL_CANDIDATE_CONNECT
+if siyuan_47_warm_replace_api token-123; then
+  echo 'candidate network failure must stop before the handoff' >&2
+  exit 1
+fi
+[[ ! -f "$FAKE_DOCKER_STATE/canonical-up" ]]
+[[ -f "$FAKE_DOCKER_STATE/candidate-removed" ]]
+! grep -q '^compose up .* api$' "$FAKE_DOCKER_LOG"
+
+rm -f "$FAKE_DOCKER_STATE"/* "$FAKE_DOCKER_LOG"
+unset FAIL_CANDIDATE_CONNECT
 FAIL_CANDIDATE_ROUTE=true
 export FAIL_CANDIDATE_ROUTE
 if siyuan_47_warm_replace_api token-123; then
