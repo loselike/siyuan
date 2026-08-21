@@ -135,9 +135,10 @@ describe('Settings and admin flows', () => {
     expect(screen.queryByText('工作台')).not.toBeInTheDocument();
     expect(screen.getByTestId('role-permission-option-grid')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '列设置' })).not.toBeInTheDocument();
-    for (const workspace of ['运营工作台', '报价查价', '业务管理', '仓库管理', '市场管理', '客服管理', '物流轨迹管理', '财务管理', '基础资料库', '系统管理']) {
+    for (const workspace of ['运营工作台', '报价查价', '业务管理', '仓库管理', '市场管理', '客服管理', '物流轨迹管理', '财务管理', '杂费', '基础资料库', '系统管理']) {
       await user.click(screen.getByRole('tab', { name: workspace }));
       expect(screen.getByTestId('role-permission-option-grid')).toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /^授权进入/ })).not.toBeInTheDocument();
     }
     await user.click(screen.getByRole('tab', { name: '报价查价' }));
     expect(screen.getAllByText('查价').length).toBeGreaterThan(0);

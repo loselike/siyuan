@@ -1021,53 +1021,6 @@ export function SettingsPage({
     }
   }
 
-  function togglePermissionGroupAccess(
-    roleKey: RoleKey,
-    group: string,
-    permissions: RolePermissionMatrix['availablePermissions'],
-    checked: boolean
-  ) {
-    setDraftPermissions((current) => {
-      const currentPermissions = current[roleKey] ?? selectedPermissionRole?.permissions ?? [];
-      if (group === '报价查价 / 查价') {
-        const next = new Set(currentPermissions);
-        if (!checked) {
-          Array.from(next)
-            .filter((code) => code.startsWith('pricing:lookup:'))
-            .forEach((code) => next.delete(code));
-        }
-        return { ...current, [roleKey]: Array.from(next) };
-      }
-      if (group === '报价查价 / 代理加价规则') {
-        const next = new Set(currentPermissions);
-        if (!checked) {
-          Array.from(next)
-            .filter((code) => code.startsWith('pricing:markup:'))
-            .forEach((code) => next.delete(code));
-        }
-        return { ...current, [roleKey]: Array.from(next) };
-      }
-      const next = updatePermissionGroupAccess(
-        currentPermissions,
-        group,
-        permissions,
-        checked
-      );
-      if (group === '业务管理 / 录单' && !checked) {
-        return {
-          ...current,
-          [roleKey]: next.filter((code) => !orderEntryPermissionControls.some((control) => control.code === code))
-        };
-      }
-      return {
-        ...current,
-        [roleKey]: !checked && group === '运营工作台 / 专线运单池'
-          ? next.filter((code) => !code.startsWith('operations:line-shipment:stage-edit:') && !code.startsWith('operations:line-shipment:stage-edit-block:'))
-          : next
-      };
-    });
-  }
-
   function toggleOrderEntryPermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
     setDraftPermissions((current) => {
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
@@ -2299,7 +2252,7 @@ export function SettingsPage({
                 <section className="role-permission-modules" aria-label="权限模块">
                   <div className="role-permission-pane-title">
                     <Text strong>模块入口</Text>
-                    <Text type="secondary">一级目录固定 11 个，另设总规则；二级入口控制进入权限，具体操作权限按页面配置</Text>
+                    <Text type="secondary">一级目录固定 11 个，另设总规则；二级入口用于选择配置页，具体权限在右侧按功能配置</Text>
                   </div>
                   <div className="role-permission-workspace-switch" role="tablist" aria-label="一级模块">
                     {permissionWorkspaceCatalog.map((workspace) => (
@@ -2347,16 +2300,9 @@ export function SettingsPage({
                         ? getPermissionGroupAccessState(group, permissions, selectedRoleGrantedPermissions)
                         : { checked: false, indeterminate: false, grantedCount: 0 };
                       const administrator = isAdministratorRoleRow(selectedPermissionRole);
-                      const directBusinessGrantGroup = group === '报价查价 / 查价'
-                        || group === '报价查价 / 代理加价规则'
-                        || group === '报价查价 / 价格表管理'
-                        || group === '业务管理 / 草稿箱'
-                        || group.startsWith('市场管理 / ')
-                        || group.startsWith('仓库管理 / ')
-                        || group.startsWith('财务管理 / ');
                       return (
                         <div
-                          className={`role-permission-module-card${selected ? ' is-active is-current' : ''}${administrator || accessState.checked ? ' is-open' : ''}${directBusinessGrantGroup ? ' is-direct' : ''}`}
+                          className={`role-permission-module-card is-direct${selected ? ' is-active is-current' : ''}${administrator || accessState.checked ? ' is-open' : ''}`}
                           data-current={selected ? 'true' : 'false'}
                           key={group}
                         >
@@ -2373,17 +2319,6 @@ export function SettingsPage({
                               <Text strong>{group.replace(`${permissionWorkspace.label} / `, '')}</Text>
                             </span>
                           </button>
-                          {!directBusinessGrantGroup ? <Checkbox
-                            aria-label={`授权进入${group.replace(`${permissionWorkspace.label} / `, '')}`}
-                            disabled={administrator || !accessControl}
-                            checked={administrator || accessState.checked}
-                            indeterminate={!administrator && accessState.indeterminate}
-                            onChange={(event) => {
-                              setSelectedPermissionWorkspaceView('entries');
-                              setSelectedWorkspacePermissionGroup(group);
-                              togglePermissionGroupAccess(selectedPermissionRole.key, group, permissions, event.target.checked);
-                            }}
-                          /> : null}
                         </div>
                       );
                     })}

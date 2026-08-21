@@ -420,10 +420,9 @@ export function filterPermissionControlsForRole<T extends Pick<PermissionControl
 }
 
 /**
- * Every permission page has one human-facing entry switch. The switch maps
- * to the existing page-access permission and does not invent a new root code.
- * The current UI treats the whole group as one二级开关; the individual codes
- * remain available here so existing role permissions can be carried forward.
+ * Resolve the existing page-access permission represented in the right-side
+ * functional controls. Second-level cards only select a configuration page;
+ * they do not expose a second, duplicate permission checkbox.
  */
 export function getPermissionGroupAccessControl(
   group: string,
@@ -453,9 +452,9 @@ export function getPermissionControlState(control: Pick<PermissionControl, 'code
 }
 
 /**
- * 二级入口是当前阶段唯一可配置的权限开关。历史角色可能只有入口下的
+ * 二级卡片只展示当前授权状态，不直接修改权限。历史角色可能只有入口下的
  * 某些旧操作码，没有显式的 :view/:read/:list 入口码；只要已有任一权限，
- * 页面就应把该二级入口显示为已开放，避免兼容旧授权时出现“权限丢失”的错觉。
+ * 卡片仍显示为已开放，避免兼容旧授权时出现“权限丢失”的错觉。
  */
 export function getPermissionGroupAccessState(
   group: string,
