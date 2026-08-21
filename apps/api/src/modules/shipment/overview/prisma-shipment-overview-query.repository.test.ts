@@ -4,8 +4,11 @@ import { PrismaShipmentOverviewQueryRepository } from './prisma-shipment-overvie
 
 const configuredMarker = 'system-internal:role-permissions-configured';
 
-function fieldMasks() {
-  return Object.fromEntries(globalFieldMaskKeys.map((key) => [key, false])) as Principal['globalFieldMasks'];
+function fieldMasks(overrides: Partial<NonNullable<Principal['globalFieldMasks']>> = {}) {
+  return {
+    ...Object.fromEntries(globalFieldMaskKeys.map((key) => [key, false])),
+    ...overrides
+  } as Principal['globalFieldMasks'];
 }
 
 function shipmentRow(overrides: Record<string, unknown> = {}) {
@@ -174,6 +177,39 @@ describe('PrismaShipmentOverviewQueryRepository', () => {
     }));
     expect(rows[0]).not.toHaveProperty('routeCostTotal');
     expect(rows[0]).not.toHaveProperty('routeCurrency');
+  });
+
+  it('keeps template availability without exposing template or agent identity when agent read is absent', async () => {
+    const row = shipmentRow({
+      entryBy: 'operator',
+      customer: { id: 'customer-1', code: '9409', name: '测试客户', salesperson: 'operator' },
+      agent: {
+        name: '代理 A',
+        invoiceTemplates: [{
+          id: 'template-1',
+          name: '代理 A 发票模板',
+          url: '/api/uploads/invoice-templates/template-1.xlsx'
+        }]
+      }
+    });
+    const { repository } = setup(['business:shipment:list'], row);
+    const principal: Principal = {
+      id: 'operator-id',
+      username: 'operator',
+      role: 'OPERATOR',
+      dataScope: 'SALES_OWN',
+      globalFieldMasks: fieldMasks()
+    };
+
+    const rows = await repository.getShipments(principal);
+
+    expect(rows[0]).toEqual(expect.objectContaining({
+      id: 'shipment-1',
+      invoiceTemplateAvailable: true,
+      invoiceTemplateOptions: [{ id: 'template-1' }]
+    }));
+    expect(rows[0].agentName).toBeFalsy();
+    expect(rows[0].agentShortName).toBeFalsy();
   });
 
   it('keeps disabled non-admin roles fail-closed', async () => {

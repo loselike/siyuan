@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
-import { RequirePermission } from '../../require-permission.decorator.js';
+import { RequireAllPermissions, RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
 import type { ShipmentBusinessInvoiceUploadFile } from './shipment-business-invoice-file.storage.js';
 import { ShipmentBusinessInvoiceService } from './shipment-business-invoice.service.js';
@@ -38,7 +38,7 @@ export class ShipmentBusinessInvoiceController {
   }
 
   @Get('shipments/:id/invoice-template/download')
-  @RequirePermission('business:order-entry:invoice-upload')
+  @RequireAllPermissions('business:shipment:list', 'data-scope:sales-own')
   async downloadShipmentInvoiceTemplate(
     @Req() request: { user: Principal },
     @Param('id') id: string,

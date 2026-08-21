@@ -1,8 +1,16 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { renderAndLogin, shipment } from '../testSupport/appTestHarness';
+import { employeeShipments, renderAndLogin, shipment, systemRoleMatrix } from '../testSupport/appTestHarness';
 import { matchesOrderManagementFilters } from './OrdersPage';
+
+function setTestRolePermissions(role: string, permissions: string[]): () => void {
+  const row = systemRoleMatrix.roles.find((item) => item.key === role);
+  if (!row) throw new Error(`测试角色不存在: ${role}`);
+  const previous = [...row.permissions];
+  row.permissions = [...permissions];
+  return () => { row.permissions = previous; };
+}
 
 async function openOrderManagement(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
@@ -105,5 +113,39 @@ describe('Orders flows', () => {
     expect(screen.queryByRole('button', { name: '分配渠道' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '填写转单号' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '批量添加轨迹' })).not.toBeInTheDocument();
+  });
+
+  it('lets a scoped salesperson download the template for a visible shipment without invoice-upload permission', async () => {
+    const permissions = [
+      'workspace:access',
+      'business:shipment:list',
+      'data-scope:sales-own'
+    ];
+    const restoreLoginPermissions = setTestRolePermissions('OPERATOR', permissions);
+    const restoreAssignedRolePermissions = setTestRolePermissions('UG_BUSINESS', permissions);
+    const ownShipment = employeeShipments.find((item) => item.id === 's-1');
+    if (!ownShipment) throw new Error('缺少本人运单测试样本');
+    ownShipment.invoiceTemplateAvailable = true;
+    ownShipment.invoiceTemplateOptions = [{ id: 'template-1' }];
+
+    try {
+      const user = userEvent.setup();
+      await renderAndLogin('operator', 'operator123');
+      await openOrderManagement(user);
+
+      const row = document.querySelector<HTMLElement>('tr[data-row-key="s-1"]');
+      expect(row).not.toBeNull();
+      const downloadButton = within(row!).getByRole('button', { name: '下载发票模板' });
+      expect(downloadButton).toBeEnabled();
+      await user.click(downloadButton);
+
+      await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/shipments/s-1/invoice-template/download?templateId=template-1'),
+        expect.anything()
+      ));
+    } finally {
+      restoreAssignedRolePermissions();
+      restoreLoginPermissions();
+    }
   });
 });

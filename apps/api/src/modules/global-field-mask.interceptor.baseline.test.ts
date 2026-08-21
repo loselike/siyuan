@@ -91,6 +91,32 @@ describe('global sensitive field deny baseline', () => {
     }, state, '/api/master-data')).toEqual({ agents: [], agentChannels: [] });
   });
 
+  it('keeps visible-shipment template capability while hiding agent and template identity', () => {
+    const state = resolveGlobalFieldMaskState([
+      'system:global-mask:agent-data'
+    ] as PermissionKey[]);
+
+    expect(isGlobalSensitiveFilePathBlocked(
+      '/api/shipments/shipment-1/invoice-template/download?templateId=template-1',
+      state
+    )).toBe(false);
+    expect(isGlobalSensitiveFilePathBlocked(
+      '/api/master-data/agent-invoice-template/download',
+      state
+    )).toBe(true);
+    expect(maskGlobalSensitiveValue({
+      id: 'shipment-1',
+      agentId: 'agent-1',
+      agentName: 'masked-agent',
+      invoiceTemplateAvailable: true,
+      invoiceTemplateOptions: [{ id: 'template-1', name: 'masked-agent-template.xlsx' }]
+    }, state, '/api/shipments')).toEqual({
+      id: 'shipment-1',
+      invoiceTemplateAvailable: true,
+      invoiceTemplateOptions: [{ id: 'template-1' }]
+    });
+  });
+
   it('keeps repository-sanitized internal-flow summaries while removing agent identity fields', () => {
     const state = resolveGlobalFieldMaskState([
       'system:global-mask:agent-short-name',

@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Inject, Inj
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
+import { findInMemoryShipmentOverviewRow, scopeInMemoryShipmentOverviewRows } from './shipment/overview/in-memory-shipment-overview.scope.js';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
 import { pricingMarkupActionPermission, pricingMarkupModules, pricingMarkupViewPermission } from './pricing-markup-permissions.js';
 import {
@@ -1516,7 +1517,7 @@ export class InMemoryRepository {
         ? this.shipments
           .filter((shipment) => !this.deletedShipmentIds.has(shipment.id))
           .filter((shipment) => this.isShipmentInCustomerServiceScope(principal, shipment))
-      : this.visibleShipments(principal, options.salesScopeMode);
+      : scopeInMemoryShipmentOverviewRows(this.shipments.filter((shipment) => !this.deletedShipmentIds.has(shipment.id)), principal, options.salesScopeMode, (shipment, scope) => this.isShipmentInSalesScope(shipment, scope), () => this.visibleShipments(principal, options.salesScopeMode));
     return scopedShipments.map((shipment) => this.maskShipmentListFields(
       principal,
       (() => {
@@ -14787,7 +14788,7 @@ export class InMemoryRepository {
   }
 
   async downloadShipmentInvoiceTemplate(principal: Principal, shipmentId: string, templateId?: string): Promise<{ extension: '.xls' | '.xlsx'; buffer: Buffer }> {
-    const shipment = this.visibleShipment(principal, shipmentId);
+    const shipment = findInMemoryShipmentOverviewRow(this.shipments.filter((item) => !this.deletedShipmentIds.has(item.id)), principal, shipmentId, (item, scope) => this.isShipmentInSalesScope(item, scope), () => this.visibleShipments(principal), (item) => item.id);
     if (!canDownloadShipmentInvoiceTemplate(shipment.status)) {
       throw new BadRequestException('仅已排货及之后状态的运单可以下载发票模板');
     }
@@ -18354,11 +18355,10 @@ export class InMemoryRepository {
     if (fieldMasks?.['agent-short-name'] || fieldMasks?.['agent-data']) delete (safeVisible as Partial<Shipment>).agentShortName;
     if (fieldMasks?.['agent-company-name'] || fieldMasks?.['agent-data']) delete (safeVisible as Partial<Shipment>).agentName;
     if (fieldMasks?.['agent-channel'] || fieldMasks?.['agent-data']) delete (safeVisible as Partial<Shipment>).routeAgentChannelName;
+    if ((!marketVisibility.canViewMarketAgent && !marketVisibility.exposeWarehouseRouting) || Boolean(fieldMasks && (fieldMasks['agent-short-name'] || fieldMasks['agent-company-name'] || fieldMasks['agent-channel'] || fieldMasks['agent-data']))) safeVisible.invoiceTemplateOptions = safeVisible.invoiceTemplateOptions?.map((template) => ({ id: template.id }));
     if (fieldMasks?.['agent-data']) {
       delete (safeVisible as Partial<Shipment>).agentId;
       delete (safeVisible as Partial<Shipment>).agentWeightKg;
-      delete (safeVisible as Partial<Shipment>).invoiceTemplateAvailable;
-      delete (safeVisible as Partial<Shipment>).invoiceTemplateOptions;
     }
     if (fieldMasks?.['payable-cost']) {
       if (safeVisible.linePoolFinanceSummary) {

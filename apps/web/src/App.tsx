@@ -263,7 +263,7 @@ export function App() {
   const [detailViewingShipment, setDetailViewingShipment] = useState<Shipment | null>(null);
   const [invoiceTemplateSelection, setInvoiceTemplateSelection] = useState<{
     record: Shipment;
-    templates: Array<{ id: string; name: string }>;
+    templates: Array<{ id: string; name?: string }>;
   } | null>(null);
   const [selectedInvoiceTemplateId, setSelectedInvoiceTemplateId] = useState<string>();
   const [invoiceTemplateDownloadLoading, setInvoiceTemplateDownloadLoading] = useState(false);
@@ -472,13 +472,14 @@ export function App() {
     () => getGlobalFieldMaskVisibility(session?.user.role, session?.permissions ?? []),
     [session?.permissions, session?.user.role]
   );
-  const canUseAgentInvoiceTemplate = globalFieldMaskVisibility.showAgentData
+  const canUseRoutingAgentFields = globalFieldMaskVisibility.showAgentData
     && globalFieldMaskVisibility.showAgentShortName
     && globalFieldMaskVisibility.showAgentCompanyName
-    && globalFieldMaskVisibility.showAgentChannel;
-  const canUseRoutingAgentFields = canUseAgentInvoiceTemplate
+    && globalFieldMaskVisibility.showAgentChannel
     && globalFieldMaskVisibility.showPayableCost
     && globalFieldMaskVisibility.showPayableStatus;
+  const canDownloadVisibleShipmentInvoiceTemplate = session?.user.role === 'ADMIN'
+    || (session?.permissions.includes('business:shipment:list') === true && hasSalesOwnDataScope);
 
   useEffect(() => {
     localStorage.setItem(shipmentColumnOrderStorageKey, shipmentColumnOrderMode);
@@ -1514,7 +1515,7 @@ export function App() {
                 <Button size="small" onClick={() => openShipmentLogModal(record, 'operation')}>
                   操作日志
                 </Button>
-                {canUseAgentInvoiceTemplate && (session?.user.role === 'ADMIN' || session?.permissions.includes('business:order-entry:invoice-upload')) ? (
+                {canDownloadVisibleShipmentInvoiceTemplate ? (
                   <Tooltip title={invoiceTemplateDisabledReason}>
                     <span>
                       <Button
@@ -1686,8 +1687,8 @@ export function App() {
   }
 
   async function downloadShipmentInvoiceTemplate(record: Shipment, templateId?: string) {
-    if (!canUseAgentInvoiceTemplate) {
-      setNotice('代理字段已按权限屏蔽，当前账号不能下载发票模板');
+    if (!canDownloadVisibleShipmentInvoiceTemplate) {
+      setNotice('当前账号不能访问运单管理');
       return;
     }
     try {
@@ -1706,8 +1707,8 @@ export function App() {
   }
 
   async function handleDownloadShipmentInvoiceTemplate(record: Shipment) {
-    if (!canUseAgentInvoiceTemplate) {
-      setNotice('代理字段已按权限屏蔽，当前账号不能下载发票模板');
+    if (!canDownloadVisibleShipmentInvoiceTemplate) {
+      setNotice('当前账号不能访问运单管理');
       return;
     }
     const templates = record.invoiceTemplateOptions?.length
@@ -1738,7 +1739,7 @@ export function App() {
   }
 
   async function confirmInvoiceTemplateDownload() {
-    if (!canUseAgentInvoiceTemplate || !invoiceTemplateSelection || !selectedInvoiceTemplateId) return;
+    if (!canDownloadVisibleShipmentInvoiceTemplate || !invoiceTemplateSelection || !selectedInvoiceTemplateId) return;
     setInvoiceTemplateDownloadLoading(true);
     try {
       await downloadShipmentInvoiceTemplate(invoiceTemplateSelection.record, selectedInvoiceTemplateId);
@@ -2950,7 +2951,7 @@ export function App() {
           </Modal>
           <Modal
             title="选择发票模板"
-            open={Boolean(invoiceTemplateSelection) && canUseAgentInvoiceTemplate}
+            open={Boolean(invoiceTemplateSelection) && canDownloadVisibleShipmentInvoiceTemplate}
             width={560}
             okText="下载所选模板"
             cancelText="取消"
