@@ -4,11 +4,11 @@
 - 会话标题：`Sunny｜架构控制面快速落地｜06`
 - 续接自：`docs/archive/dev-now/2026-08/role-permission-reader-phase5-20260821.md`
 - 上下文状态：`green`
-- 已观察压缩：`1`
-- 输入来源：`无（持续目标自动续接）`
+- 已观察压缩：`2`
+- 输入来源：`用户于 2026-08-21 明确授权畸形输入 500 -> 400`
 - 会话 slug：`warehouse-package-runtime-input-phase6-20260821`
-- 分支：`待从最新 main 创建 codex/warehouse-package-runtime-input-phase6-20260821`
-- worktree：`待创建独立 worktree`
+- 分支：`codex/warehouse-package-runtime-input-phase6-20260821`
+- worktree：`/Users/j1ng/Tools/sunny-warehouse-package-runtime-input-phase6-20260821`
 - 认领时间：`2026-08-21 Asia/Shanghai`
 
 ## 用户可见目标
@@ -48,6 +48,13 @@
 ## 当前进度
 
 - 已完成阶段重评并选定 5 条仓库包裹写接口；已检查 NestJS/Medusa 官方输入校验边界，尚未开始运行时代码修改。
+- 已从最新 `main@59f5d13d` 创建独立 worktree，开始补迁移前非法输入 characterization。
+- 迁移前 characterization 已通过 3/3：五条接口均先执行鉴权/权限（未登录 401、客户角色 403）；数字型 `customerCode`、`remark`、`manualException` 和两个删除入口的字符串型 `ids` 当前都会在 Repository 抛出 `TypeError` 并返回 500；空 `ids`、空删除原因和超长删除原因分别保持既有精确 400 文案；所有失败请求后固定包裹未发生持久化变化。
+- 两个删除入口的合法管理员路径已冻结：均返回既有 201 与 `{ deletedIds, deletedCount }`，随后列表中对应包裹不存在；原有生命周期 E2E 已覆盖编辑、备注、异常的合法响应、持久化与审计。
+- 迁移前确认标准 `RuntimeInputSchema` 会把上述四类畸形请求从非受控 500 改为稳定 400；该可观察错误契约变化已单独暂停并取得用户明确授权。
+- 用户已明确授权错误契约优化；现已在 Shared 增加编辑、备注、异常、删除四类 schema，并接入五条 Controller 路由。合法数字/数字字符串的既有转换、空值/未知字段、删除业务校验文案和路由级鉴权均保留；非对象请求体、错误字段类型、`NaN` 与无限数值改为稳定 400。
+- 独立风险审查发现数值字段曾继续接受布尔/数组/对象并可能静默改写重量尺寸（P1），已修复为仅接受有限 number、有限数字字符串及明确保留的 null/空字符串旧语义，并补 HTTP 失败后不落库证据。审查 P2 确认：畸形 body 会在路由 Guard 后、Repository 对象权限/存在性检查前统一返回 400；合法请求的 403/404 与权限不变，主线程接受这一已授权错误契约结果。裸计数门禁不足以绑定指定 schema 的 P2 也已通过五条精确 AST 断言关闭。
+- 当前本地证据：Shared schema 15/15、迁移后固定样本 4/4、既有生命周期 E2E 2/2、安全契约 3/3、Shared/API/Web typecheck、448 路由、18 类架构自测、完整治理与 `git diff --check` 均通过；裸 `@Body()` 从 230 降为 225。
 
 ## 验证计划
 
@@ -56,6 +63,7 @@
 
 ## 交接
 
-- 阻塞：无
+- 阻塞：无；用户已授权畸形输入错误契约优化。
 - 发布状态：`未实施`
-- 准确下一步：归档 Phase5 状态，从最新 main 创建独立 worktree，先补迁移前 characterization，再实现 5 个等价 runtime schema。
+- 交接检查点：运行时 schema 与五条路由接入已完成；独立风险审查 P1 已修复，P2 已决策/关闭；定向效果、兼容、权限、三端类型、架构自测和完整治理通过，尚未提交实现 commit。
+- 准确下一步：提交并推送实现，创建/合并 PR，等待主干 CI；随后从干净发布协调 worktree获取 baseline receipt，精确发布 Shared/API 影响范围到 47 并完成非写入线上验收。

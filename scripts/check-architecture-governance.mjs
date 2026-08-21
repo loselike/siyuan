@@ -13,7 +13,7 @@ const printCurrent = process.argv.includes('--print-current');
 const skipLint = process.argv.includes('--skip-lint');
 const compact = process.argv.includes('--compact');
 const selfTest = process.argv.includes('--self-test');
-const nakedBodyDecoratorsMax = 230;
+const nakedBodyDecoratorsMax = 225;
 const rootAppModuleDebtMax = Object.freeze({
   lines: 414,
   directControllers: 40,
@@ -50,6 +50,39 @@ const routePolicyEvidence = {
   }
 };
 
+const runtimeInputEvidence = [
+  {
+    file: 'apps/api/src/modules/warehouse/package/warehouse-package-lifecycle.controller.ts',
+    controller: 'WarehousePackageLifecycleController',
+    handler: 'updateWarehousePackage',
+    schema: 'warehousePackageUpdateInputSchema'
+  },
+  {
+    file: 'apps/api/src/modules/warehouse/package/warehouse-package-lifecycle.controller.ts',
+    controller: 'WarehousePackageLifecycleController',
+    handler: 'updateWarehousePackageRemark',
+    schema: 'warehousePackageRemarkInputSchema'
+  },
+  {
+    file: 'apps/api/src/modules/warehouse/package/warehouse-package-lifecycle.controller.ts',
+    controller: 'WarehousePackageLifecycleController',
+    handler: 'updateWarehousePackageException',
+    schema: 'warehousePackageExceptionInputSchema'
+  },
+  {
+    file: 'apps/api/src/modules/warehouse/inventory/warehouse-inventory-query.controller.ts',
+    controller: 'WarehouseInventoryQueryController',
+    handler: 'deleteTodayReceiptPackages',
+    schema: 'warehousePackageDeleteInputSchema'
+  },
+  {
+    file: 'apps/api/src/modules/warehouse/inventory/warehouse-inventory-query.controller.ts',
+    controller: 'WarehouseInventoryQueryController',
+    handler: 'deleteInStockPackages',
+    schema: 'warehousePackageDeleteInputSchema'
+  }
+];
+
 function sourceFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const absolutePath = path.join(directory, entry.name);
@@ -67,6 +100,39 @@ function countNakedBodyDecorators() {
 
 function checkRuntimeInputDebt(failures) {
   assertMaximum('naked @Body() decorators', countNakedBodyDecorators(), nakedBodyDecoratorsMax, failures);
+  for (const evidence of runtimeInputEvidence) {
+    const absolutePath = path.join(repositoryRoot, evidence.file);
+    const source = readFileSync(absolutePath, 'utf8');
+    if (!hasRuntimeInputBinding(source, absolutePath, evidence)) {
+      failures.push(`${evidence.controller}.${evidence.handler} must bind @Body(new RuntimeInputPipe(${evidence.schema}))`);
+    }
+  }
+}
+
+function hasRuntimeInputBinding(source, fileName, evidence) {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const controller = sourceFile.statements.find(
+    (statement) => ts.isClassDeclaration(statement) && statement.name?.text === evidence.controller
+  );
+  if (!controller || !ts.isClassDeclaration(controller)) return false;
+  const handler = controller.members.find(
+    (member) => ts.isMethodDeclaration(member) && member.name?.getText(sourceFile) === evidence.handler
+  );
+  if (!handler || !ts.isMethodDeclaration(handler)) return false;
+  return handler.parameters.some((parameter) => {
+    if (!ts.canHaveDecorators(parameter)) return false;
+    return (ts.getDecorators(parameter) ?? []).some((decorator) => {
+      const bodyCall = decorator.expression;
+      if (!ts.isCallExpression(bodyCall) || bodyCall.expression.getText(sourceFile) !== 'Body') return false;
+      const runtimePipe = bodyCall.arguments[0];
+      return Boolean(
+        runtimePipe
+        && ts.isNewExpression(runtimePipe)
+        && runtimePipe.expression.getText(sourceFile) === 'RuntimeInputPipe'
+        && runtimePipe.arguments?.[0]?.getText(sourceFile) === evidence.schema
+      );
+    });
+  });
 }
 
 function rootAppModuleAssemblySnapshot() {
@@ -607,8 +673,25 @@ function runSelfTest() {
   if (!permissionFailures.some((failure) => failure.includes('one canonical definition'))) {
     throw new Error('architecture self-test must reject duplicate PermissionKey definitions');
   }
+  const runtimeEvidenceFixture = {
+    controller: 'FixtureController',
+    handler: 'update',
+    schema: 'fixtureSchema'
+  };
+  const validRuntimeBinding = `class FixtureController {
+    update(@Body(new RuntimeInputPipe(fixtureSchema)) body: unknown) {}
+  }`;
+  const invalidRuntimeBinding = `class FixtureController {
+    update(@Body() body: unknown) {}
+  }`;
+  if (!hasRuntimeInputBinding(validRuntimeBinding, 'fixture.controller.ts', runtimeEvidenceFixture)) {
+    throw new Error('architecture self-test must accept an exact runtime input binding');
+  }
+  if (hasRuntimeInputBinding(invalidRuntimeBinding, 'fixture.controller.ts', runtimeEvidenceFixture)) {
+    throw new Error('architecture self-test must reject a naked body binding');
+  }
   execFileSync(process.execPath, ['scripts/architecture-baseline.mjs', 'self-test'], { cwd: repositoryRoot, stdio: 'pipe' });
-  console.log(`[architecture:check] SELF-TEST PASS (${requiredFragments.length + 3} failure classes)`);
+  console.log(`[architecture:check] SELF-TEST PASS (${requiredFragments.length + 4} failure classes)`);
 }
 
 if (selfTest) {
